@@ -20,7 +20,7 @@ func TestGenerarEventos(t *testing.T) {
 		for _, oc := range evento.Ocurrencias {
 			ocurrencias++
 			if !strings.HasPrefix(oc.Fecha, "2026-11") || oc.AsientosDisponibles != 100 {
-				t.Fatalf("ocurrencia inválida en %s: %+v", evento.IdEvento, oc)
+				t.Fatalf("ocurrencia rara en %s: %+v", evento.IdEvento, oc)
 			}
 		}
 	}
@@ -82,6 +82,6 @@ func TestSolicitudRepetidaNoSeEjecutaDosVeces(t *testing.T) {
 	}
 	libres, _ := base.Disponibilidad(ctx, "E1", 1)
 	if libres != 95 || segunda.Reserva == nil || primera.Reserva.IdReserva != segunda.Reserva.IdReserva {
-		t.Fatalf("la solicitud repetida se ejecutó dos veces, quedan %d libres", libres)
+		t.Fatalf("la solicitud repetida se ejecuto dos veces, quedan %d libres", libres)
 	}
 }

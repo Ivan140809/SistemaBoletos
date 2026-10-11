@@ -86,25 +86,25 @@ func NuevoID(prefijo string) string {
 
 func (s Solicitud) Validar() error {
 	if s.IdSolicitud == "" || s.IdCliente == "" {
-		return errors.New("faltan idSolicitud o idCliente")
+		return errors.New("la solicitud llego sin id o sin cliente")
 	}
 	switch s.Tipo {
 	case TipoConsulta:
 		if _, err := time.Parse("2006-01", s.Mes); err != nil {
-			return fmt.Errorf("mes %q inválido,usa AAAA-MM", s.Mes)
+			return fmt.Errorf("el mes %q no sirve, escribalo como 2026-11", s.Mes)
 		}
 	case TipoReserva:
 		if s.IdEvento == "" {
-			return errors.New("falta idEvento")
+			return errors.New("falta decir cual evento")
 		}
 		if s.IdOcurrencia < 1 {
-			return errors.New("idOcurrencia inválido debe ser 1 o mayor")
+			return errors.New("la fecha del evento se cuenta desde 1")
 		}
 		if s.CantidadAsientos < 1 {
-			return errors.New("la cantidad de asientos inválido debe ser 1 o mayor")
+			return errors.New("hay que pedir por lo menos 1 asiento")
 		}
 	default:
-		return fmt.Errorf("operación %q no disponible en la primera entrega (solo consulta y reserva)", s.Tipo)
+		return fmt.Errorf("no se reconoce la operacion %q", s.Tipo)
 	}
 	return nil
 }
@@ -112,11 +112,11 @@ func (s Solicitud) Validar() error {
 func (s Solicitud) Resumen() string {
 	switch s.Tipo {
 	case TipoConsulta:
-		return fmt.Sprintf("%s cliente=%s mes=%s", s.Tipo, s.IdCliente, s.Mes)
+		return fmt.Sprintf("%s consulta los eventos de %s", s.IdCliente, s.Mes)
 	case TipoReserva:
-		return fmt.Sprintf("%s cliente=%s evento=%s ocurrencia=%d asientos=%d", s.Tipo, s.IdCliente, s.IdEvento, s.IdOcurrencia, s.CantidadAsientos)
+		return fmt.Sprintf("%s pide %s de %s en la fecha %d", s.IdCliente, Asientos(s.CantidadAsientos), s.IdEvento, s.IdOcurrencia)
 	}
-	return fmt.Sprintf("%s cliente=%s", s.Tipo, s.IdCliente)
+	return fmt.Sprintf("%s manda una solicitud de tipo %q", s.IdCliente, s.Tipo)
 }
 
 func Resultado(exito bool) string {
@@ -126,9 +126,26 @@ func Resultado(exito bool) string {
 	return "fallo"
 }
 
+func Asientos(n int) string {
+	if n == 1 {
+		return "1 asiento"
+	}
+	return fmt.Sprintf("%d asientos", n)
+}
+
+func Quedan(n int) string {
+	switch n {
+	case 0:
+		return "no queda ninguno"
+	case 1:
+		return "solo queda 1"
+	}
+	return fmt.Sprintf("solo quedan %d", n)
+}
+
 func TablaEventos(eventos []Evento) string {
 	if len(eventos) == 0 {
-		return "No hay eventos registrados.\n"
+		return "no hay eventos para mostrar\n"
 	}
 	var sb strings.Builder
 	capacidad, disponibles := 0, 0
@@ -140,14 +157,14 @@ func TablaEventos(eventos []Evento) string {
 			disponibles += oc.AsientosDisponibles
 		}
 	}
-	fmt.Fprintf(&sb, "En total quedan %d de %d asientos libres.\n", disponibles, capacidad)
+	fmt.Fprintf(&sb, "en total quedan %d de %d asientos libres\n", disponibles, capacidad)
 	return sb.String()
 }
 
 func ocupacion(oc Ocurrencia) string {
 	switch {
 	case oc.AsientosDisponibles == 0:
-		return fmt.Sprintf("AGOTADO (%d de %d vendidos)", oc.AsientosVendidos, oc.CapacidadTotal)
+		return fmt.Sprintf("agotado, se vendieron los %d asientos", oc.CapacidadTotal)
 	case oc.AsientosVendidos == 0:
 		return fmt.Sprintf("%d de %d asientos libres", oc.AsientosDisponibles, oc.CapacidadTotal)
 	}
@@ -160,5 +177,5 @@ func FechaLegible(fecha string) string {
 		return fecha
 	}
 	meses := []string{"enero", "febrero", "marzo", "abril", "mayo", "junio", "julio", "agosto", "septiembre", "octubre", "noviembre", "diciembre"}
-	return fmt.Sprintf("%d de %s", t.Day(), meses[t.Month()-1]) // ej: 2026-11-14 -> 14 de noviembre
+	return fmt.Sprintf("%d de %s", t.Day(), meses[t.Month()-1]) // ej: 2026-11-14 queda como 14 de noviembre
 }

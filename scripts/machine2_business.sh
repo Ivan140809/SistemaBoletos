@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 set -euo pipefail
 cd "$(dirname "$0")/.."
-: "${IP_ALMACEN:?exporte IP_ALMACEN con la IP de la máquina 3}"
+: "${IP_ALMACEN:?falta IP_ALMACEN, la ip de la maquina 3}"
 trap 'kill $(jobs -p) 2>/dev/null' EXIT
 ./bin/manager &
 sleep 0.5

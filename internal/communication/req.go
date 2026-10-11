@@ -30,7 +30,7 @@ func (c *ClienteReq) conectar() error {
 	socket.SetSndtimeo(c.timeout) // para que no se quede bloqueado esperando la repuesta
 	if err := socket.Connect(c.endpoint); err != nil {
 		socket.Close()
-		return fmt.Errorf("error al conectar con %s: %w", c.endpoint, err)
+		return fmt.Errorf("no se pudo conectar con %s: %w", c.endpoint, err)
 	}
 	c.socket = socket
 	return nil
@@ -51,7 +51,7 @@ func (c *ClienteReq) Pedir(peticion, respuesta any) error {
 		if errConexion := c.conectar(); errConexion != nil {
 			return errConexion
 		}
-		return fmt.Errorf("sin respuesta de %s después de %v", c.endpoint, c.timeout)
+		return fmt.Errorf("%s no contesto en %v", c.endpoint, c.timeout)
 	}
 	return json.Unmarshal(recibido, respuesta)
 }

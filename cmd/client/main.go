@@ -63,7 +63,7 @@ func opciones(fs *flag.FlagSet, idPorDefecto string) opcionesComunes {
 	return opcionesComunes{
 		gt:      fs.String("gt", entorno("SRB_GT", "tcp://localhost:5555"), "endpoint del Gestor de Transacciones"),
 		id:      fs.String("id", idPorDefecto, "identificador del cliente"),
-		timeout: fs.Duration("timeout", 5*time.Second, "tiempo máximo de espera por la respuesta"),
+		timeout: fs.Duration("timeout", 5*time.Second, "cuanto esperar la respuesta"),
 	}
 }
 
@@ -89,7 +89,7 @@ func enviar(op opcionesComunes, s model.Solicitud) (model.Respuesta, time.Durati
 func consultar(argumentos []string) error {
 	fs := flag.NewFlagSet("consultar", flag.ExitOnError)
 	op := opciones(fs, "Cliente1")
-	mes := fs.String("mes", "2026-11", "mes a consultar (AAAA-MM)")
+	mes := fs.String("mes", "2026-11", "mes a consultar, por ejemplo 2026-11")
 	fs.Parse(argumentos)
 
 	s := model.Solicitud{IdSolicitud: model.NuevoID(*op.id), IdCliente: *op.id, Tipo: model.TipoConsulta, Mes: *mes}
@@ -97,7 +97,11 @@ func consultar(argumentos []string) error {
 	if err != nil {
 		return err
 	}
-	fmt.Printf("%s Consulta mes=%s  %s %s (%v, %s)\n", *op.id, *mes, model.Resultado(resp.Exito), resp.Mensaje, duracion.Round(time.Microsecond), resp.Instancia)
+	atendio := ""
+	if resp.Instancia != "" {
+		atendio = ", lo atendio " + resp.Instancia
+	}
+	fmt.Printf("%s consulto los eventos de %s, %s: %s (%v%s)\n", *op.id, *mes, model.Resultado(resp.Exito), resp.Mensaje, duracion.Round(time.Microsecond), atendio)
 	if resp.Exito {
 		fmt.Print(model.TablaEventos(resp.Eventos))
 	}
@@ -108,7 +112,7 @@ func reservar(argumentos []string) error {
 	fs := flag.NewFlagSet("reservar", flag.ExitOnError)
 	op := opciones(fs, "Cliente1")
 	evento := fs.String("evento", "E1", "identificador del evento")
-	ocurrencia := fs.Int("ocurrencia", 1, "ocurrencia del evento en el mes (1 o 2)")
+	ocurrencia := fs.Int("ocurrencia", 1, "cual fecha del evento, 1 o 2")
 	asientos := fs.Int("asientos", 1, "cantidad de asientos")
 	fs.Parse(argumentos)
 
@@ -117,7 +121,7 @@ func reservar(argumentos []string) error {
 	if err != nil {
 		return err
 	}
-	fmt.Printf("%s Reserva %d asientos en %s/%d %s %s (%v)\n", *op.id, *asientos, *evento, *ocurrencia, model.Resultado(resp.Exito), resp.Mensaje, duracion.Round(time.Microsecond))
+	fmt.Printf("%s pidio %s de %s en la fecha %d, %s: %s (%v)\n", *op.id, model.Asientos(*asientos), *evento, *ocurrencia, model.Resultado(resp.Exito), resp.Mensaje, duracion.Round(time.Microsecond))
 	return nil
 }
 
@@ -125,8 +129,8 @@ func concurrente(argumentos []string) error {
 	fs := flag.NewFlagSet("concurrente", flag.ExitOnError)
 	op := opciones(fs, "Concurrente")
 	evento := fs.String("evento", "E2", "evento por el que compiten los clientes")
-	ocurrencia := fs.Int("ocurrencia", 1, "ocurrencia del evento")
-	lista := fs.String("asientos", "30,25,40,20,15", "asientos que pide cada cliente, separados por coma ")
+	ocurrencia := fs.Int("ocurrencia", 1, "cual fecha del evento")
+	lista := fs.String("asientos", "30,25,40,20,15", "asientos que pide cada cliente, separados por coma")
 	fs.Parse(argumentos)
 
 	var cantidades []int
@@ -134,7 +138,7 @@ func concurrente(argumentos []string) error {
 	for _, valor := range strings.Split(*lista, ",") {
 		cantidad, err := strconv.Atoi(strings.TrimSpace(valor))
 		if err != nil || cantidad < 1 {
-			return fmt.Errorf("cantidad inválida %q", valor)
+			return fmt.Errorf("la cantidad %q no sirve", valor)
 		}
 		cantidades = append(cantidades, cantidad)
 		total += cantidad
@@ -167,7 +171,7 @@ func concurrente(argumentos []string) error {
 	}
 	conectados.Wait()
 	time.Sleep(300 * time.Millisecond)
-	fmt.Printf("Lanzando %d clientes al mismo tiempo sobre %s/%d: piden %d asientos en total\n\n", len(cantidades), *evento, *ocurrencia, total)
+	fmt.Printf("salen %d clientes al mismo tiempo por %s en la fecha %d, entre todos piden %d asientos\n\n", len(cantidades), *evento, *ocurrencia, total)
 	close(salida)
 	terminados.Wait()
 
@@ -185,6 +189,13 @@ func concurrente(argumentos []string) error {
 		}
 		fmt.Printf("%-16s %6d %12v %s %s\n", r.cliente, r.pedidos, r.duracion.Round(time.Microsecond), model.Resultado(r.resp.Exito), r.resp.Mensaje)
 	}
-	fmt.Printf("\nClientes con reserva: %d / clientes rechazados: %d / asientos concedidos: %d de %d pedidos\n", aceptados, len(resultados)-aceptados, concedidos, total)
+	fmt.Printf("\n%s, %s y se vendieron %d de los %d asientos pedidos\n", cuantos(aceptados, "cliente consiguio puesto", "clientes consiguieron puesto"), cuantos(len(resultados)-aceptados, "se quedo sin puesto", "se quedaron sin puesto"), concedidos, total)
 	return nil
+}
+
+func cuantos(n int, uno, varios string) string {
+	if n == 1 {
+		return "1 " + uno
+	}
+	return fmt.Sprintf("%d %s", n, varios)
 }

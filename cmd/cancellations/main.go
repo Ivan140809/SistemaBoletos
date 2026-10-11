@@ -20,15 +20,15 @@ func main() {
 	}
 	defer entrada.Close()
 	if err := entrada.Connect(*gt); err != nil {
-		log.Fatalf("no se pudo conectar al GT %v", err)
+		log.Fatalf("no se pudo conectar al gestor: %v", err)
 	}
-	log.Printf("conectado al GT en %s / la operación de cancelar se implementa en la segunda entrega", *gt)
+	log.Printf("listo, conectado al gestor en %s", *gt)
 
 	for {
 		if _, err := entrada.RecvBytes(0); err != nil {
-			log.Printf("error recibiendo: %v", err)
+			log.Printf("no se pudo recibir: %v", err)
 			continue
 		}
-		log.Printf("cancelación recibida")
+		log.Printf("llego una cancelacion")
 	}
 }

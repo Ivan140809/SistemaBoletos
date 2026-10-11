@@ -1,0 +1,40 @@
+{
+  "eventos": [
+    {
+      "id_evento": "E1",
+      "nombre": "Concierto de rock en el coliseo",
+      "ocurrencias": [
+        { "id_ocurrencia": 1, "fecha": "2026-11-07", "capacidad_total": 100, "asientos_disponibles": 100, "asientos_vendidos": 0 },
+        { "id_ocurrencia": 2, "fecha": "2026-11-21", "capacidad_total": 100, "asientos_disponibles": 100, "asientos_vendidos": 0 }
+      ]
+    },
+    {
+      "id_evento": "E2",
+      "nombre": "Obra de teatro en el auditorio",
+      "ocurrencias": [
+        { "id_ocurrencia": 1, "fecha": "2026-11-13", "capacidad_total": 100, "asientos_disponibles": 100, "asientos_vendidos": 0 }
+      ]
+    },
+    {
+      "id_evento": "E3",
+      "nombre": "Final de futbol interfacultades",
+      "ocurrencias": [
+        { "id_ocurrencia": 1, "fecha": "2026-11-28", "capacidad_total": 100, "asientos_disponibles": 100, "asientos_vendidos": 0 }
+      ]
+    },
+    {
+      "id_evento": "E4",
+      "nombre": "Taller de fotografia",
+      "ocurrencias": [
+        { "id_ocurrencia": 1, "fecha": "2026-11-18", "capacidad_total": 10, "asientos_disponibles": 10, "asientos_vendidos": 0 }
+      ]
+    },
+    {
+      "id_evento": "E5",
+      "nombre": "Feria de emprendimiento",
+      "ocurrencias": [
+        { "id_ocurrencia": 1, "fecha": "2026-12-05", "capacidad_total": 100, "asientos_disponibles": 100, "asientos_vendidos": 0 }
+      ]
+    }
+  ]
+}

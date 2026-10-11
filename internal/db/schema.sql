@@ -81,7 +81,7 @@ v_numero bigint;
 v_reserva srb.reservas;
 BEGIN
 IF p_cantidad IS NULL OR p_cantidad < 1 THEN
-    RETURN srb.rechazo(p_id_solicitud, 'la cantidad de asientos debe ser mayor que cero');
+    RETURN srb.rechazo(p_id_solicitud, 'hay que pedir por lo menos 1 asiento');
 END IF;
 
 INSERT INTO srb.solicitudes_procesadas (id_solicitud, operacion)
@@ -105,9 +105,9 @@ IF NOT FOUND THEN
           FROM srb.ocurrencias
          WHERE id_evento = p_id_evento AND id_ocurrencia = p_id_ocurrencia;
         IF v_disponibles IS NULL THEN
-            v_respuesta := srb.rechazo(p_id_solicitud, format('la ocurrencia %s/%s no existe', p_id_evento, p_id_ocurrencia));
+            v_respuesta := srb.rechazo(p_id_solicitud, format('no existe %s con fecha %s', p_id_evento, p_id_ocurrencia));
         ELSE
-            v_respuesta := srb.rechazo(p_id_solicitud, format('no hay asientos suficientes en %s/%s: pidió %s, quedan %s', p_id_evento, p_id_ocurrencia, p_cantidad, v_disponibles));
+            v_respuesta := srb.rechazo(p_id_solicitud, format('no alcanzan los asientos de %s en la fecha %s, pidio %s y %s', p_id_evento, p_id_ocurrencia, CASE WHEN p_cantidad = 1 THEN '1 asiento' ELSE p_cantidad || ' asientos' END, CASE v_disponibles WHEN 0 THEN 'no queda ninguno' WHEN 1 THEN 'solo queda 1' ELSE 'solo quedan ' || v_disponibles END));
         END IF;
     ELSE
         v_numero := nextval('srb.reservas_seq');
@@ -117,7 +117,7 @@ IF NOT FOUND THEN
         v_respuesta := jsonb_build_object(
             'id_solicitud', p_id_solicitud,
             'exito', true,
-            'mensaje', format('reserva %s confirmada: %s asientos en %s/%s, quedan %s', v_reserva.id_reserva, p_cantidad, p_id_evento, p_id_ocurrencia, v_disponibles),
+            'mensaje', format('reserva %s lista, %s de %s en la fecha %s, %s', v_reserva.id_reserva, CASE WHEN p_cantidad = 1 THEN '1 asiento' ELSE p_cantidad || ' asientos' END, p_id_evento, p_id_ocurrencia, CASE v_disponibles WHEN 0 THEN 'ya no quedan libres' WHEN 1 THEN 'queda 1 libre' ELSE 'quedan ' || v_disponibles || ' libres' END),
             'reserva', srb.reserva_json(v_reserva));
     END IF;
 

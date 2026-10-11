@@ -23,7 +23,7 @@ type BaseDatos struct {
 func Conectar(dsn string) (*BaseDatos, error) {
 	config, err := pgxpool.ParseConfig(dsn)
 	if err != nil {
-		return nil, fmt.Errorf("cadena de conexión inválida: %w", err)
+		return nil, fmt.Errorf("la cadena de conexion no es valida: %w", err)
 	}
 	config.MaxConns = 4
 	pool, err := pgxpool.NewWithConfig(context.Background(), config)
@@ -62,7 +62,7 @@ func (b *BaseDatos) Reiniciar(ctx context.Context, eventos []model.Evento) error
 			for _, oc := range evento.Ocurrencias {
 				fecha, err := time.Parse("2006-01-02", oc.Fecha)
 				if err != nil {
-					return fmt.Errorf("evento %s: fecha %q inválida", evento.IdEvento, oc.Fecha)
+					return fmt.Errorf("el evento %s trae una fecha que no se entiende: %q", evento.IdEvento, oc.Fecha)
 				}
 				filasOcurrencias = append(filasOcurrencias, []any{evento.IdEvento, oc.IdOcurrencia, fecha, oc.CapacidadTotal, oc.AsientosDisponibles, oc.AsientosVendidos})
 			}
@@ -80,7 +80,7 @@ func (b *BaseDatos) Reiniciar(ctx context.Context, eventos []model.Evento) error
 func (b *BaseDatos) ConsultarEventos(ctx context.Context, mes string) ([]model.Evento, error) {
 	inicio, err := time.Parse("2006-01", mes)
 	if err != nil {
-		return nil, fmt.Errorf("mes %q inválido, use AAAA-MM", mes)
+		return nil, fmt.Errorf("el mes %q no sirve, escribalo como 2026-11", mes)
 	}
 	filas, err := b.pool.Query(ctx, `
 	SELECT id_evento, nombre_evento, id_ocurrencia, fecha, capacidad_total, asientos_disponibles, asientos_vendidos
@@ -97,7 +97,7 @@ func (b *BaseDatos) Disponibilidad(ctx context.Context, idEvento string, idOcurr
 	var disponibles int
 	err := b.pool.QueryRow(ctx, `SELECT asientos_disponibles FROM srb.ocurrencias WHERE id_evento = $1 AND id_ocurrencia = $2`, idEvento, idOcurrencia).Scan(&disponibles)
 	if errors.Is(err, pgx.ErrNoRows) {
-		return 0, fmt.Errorf("la ocurrencia %s/%d no existe", idEvento, idOcurrencia)
+		return 0, fmt.Errorf("no existe %s con fecha %d", idEvento, idOcurrencia)
 	}
 	return disponibles, err
 }
@@ -113,7 +113,7 @@ func (b *BaseDatos) llamar(ctx context.Context, sql string, argumentos ...any) (
 	}
 	var resp model.Respuesta
 	if err := json.Unmarshal(datos, &resp); err != nil {
-		return model.Respuesta{}, fmt.Errorf("respuesta inválida de la BD: %w", err)
+		return model.Respuesta{}, fmt.Errorf("la base devolvio algo que no se entiende: %w", err)
 	}
 	return resp, nil
 }
@@ -137,10 +137,10 @@ func (b *BaseDatos) Tabla(ctx context.Context, conReservas bool) (string, error)
 		return "", err
 	}
 	if reservas == 0 {
-		sb.WriteString("Todavía no hay reservas.\n")
+		sb.WriteString("todavia no hay reservas\n")
 		return sb.String(), nil
 	}
-	fmt.Fprintf(&sb, "Reservas hechas: %d\n", reservas)
+	fmt.Fprintf(&sb, "reservas hechas: %d\n", reservas)
 	if !conReservas {
 		return sb.String(), nil
 	}
@@ -163,7 +163,7 @@ func (b *BaseDatos) Tabla(ctx context.Context, conReservas bool) (string, error)
 		if r.CantidadAsientos == 1 {
 			palabra = "asiento"
 		}
-		fmt.Fprintf(&sb, "   - %s: %s reservó %d %s de %s para el %s\n", r.IdReserva, r.IdCliente, r.CantidadAsientos, palabra, r.IdEvento, model.FechaLegible(fecha.Format("2006-01-02")))
+		fmt.Fprintf(&sb, "   - %s: %s reservo %d %s de %s para el %s\n", r.IdReserva, r.IdCliente, r.CantidadAsientos, palabra, r.IdEvento, model.FechaLegible(fecha.Format("2006-01-02")))
 	}
 	return sb.String(), filasReservas.Err()
 }

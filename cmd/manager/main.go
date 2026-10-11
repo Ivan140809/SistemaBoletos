@@ -22,7 +22,7 @@ func main() {
 	backend := abrir(zmq.DEALER, *dirRMC)
 	cancelaciones := abrir(zmq.PUSH, *dirCancelaciones)
 	defer cancelaciones.Close()
-	log.Printf("clientes en %s / RMC en %s / cancelaciones en %s", *dirClientes, *dirRMC, *dirCancelaciones)
+	log.Printf("listo, los clientes entran por %s, rmc por %s y cancelaciones por %s", *dirClientes, *dirRMC, *dirCancelaciones)
 
 	poller := zmq.NewPoller()
 	poller.Add(frontend, zmq.POLLIN)
@@ -30,7 +30,7 @@ func main() {
 	for {
 		listos, err := poller.Poll(-1) // espera hasta que llegue algo de un cliente o de RMC
 		if err != nil {
-			log.Printf("error en poll %v", err)
+			log.Printf("fallo el poller: %v", err)
 			continue
 		}
 		for _, listo := range listos {
@@ -50,7 +50,7 @@ func abrir(tipo zmq.Type, endpoint string) *zmq.Socket {
 		log.Fatal(err)
 	}
 	if err := socket.Bind(endpoint); err != nil {
-		log.Fatalf("no se pudo abrir %s %v", endpoint, err)
+		log.Fatalf("no se pudo abrir %s: %v", endpoint, err)
 	}
 	return socket
 }
@@ -63,16 +63,16 @@ func desdeCliente(frontend, backend *zmq.Socket) {
 	identidad, cuerpo := partes[0], partes[len(partes)-1]
 	var s model.Solicitud
 	if err := json.Unmarshal([]byte(cuerpo), &s); err != nil {
-		responder(frontend, identidad, model.Respuesta{Mensaje: "solicitud mal formada"})
+		responder(frontend, identidad, model.Respuesta{Mensaje: "no se pudo leer la solicitud"})
 		return
 	}
 	if err := s.Validar(); err != nil {
-		log.Printf("%s -> %s solicitud inválida: %v", s.Resumen(), model.Resultado(false), err)
-		responder(frontend, identidad, model.Respuesta{IdSolicitud: s.IdSolicitud, Mensaje: "solicitud inválida: " + err.Error()})
+		log.Printf("%s, %s: se rechaza porque %v", s.Resumen(), model.Resultado(false), err)
+		responder(frontend, identidad, model.Respuesta{IdSolicitud: s.IdSolicitud, Mensaje: "solicitud rechazada, " + err.Error()})
 		return
 	}
 	if _, err := backend.SendMessageDontwait(identidad, "", cuerpo); err != nil {
-		responder(frontend, identidad, model.Respuesta{IdSolicitud: s.IdSolicitud, Mensaje: "no hay instancias de RMC disponibles"})
+		responder(frontend, identidad, model.Respuesta{IdSolicitud: s.IdSolicitud, Mensaje: "no hay ningun rmc conectado para atenderla"})
 		return
 	}
 }
@@ -84,7 +84,7 @@ func desdeRMC(frontend, backend *zmq.Socket) {
 	}
 	var r model.Respuesta
 	json.Unmarshal([]byte(partes[len(partes)-1]), &r)
-	log.Printf("respuesta de %s sol=%s -> %s %s", r.Instancia, r.IdSolicitud, model.Resultado(r.Exito), r.Mensaje)
+	log.Printf("%s contesto la solicitud %s, %s: %s", r.Instancia, r.IdSolicitud, model.Resultado(r.Exito), r.Mensaje)
 	frontend.SendMessage(partes)
 }
 

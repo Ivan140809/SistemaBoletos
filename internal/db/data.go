@@ -17,7 +17,7 @@ func LeerEventos(ruta string) ([]model.Evento, error) {
 		Eventos []model.Evento `json:"eventos"`
 	}
 	if err := json.Unmarshal(datos, &archivo); err != nil {
-		return nil, fmt.Errorf("el archivo %s no es un JSON válido: %w", ruta, err)
+		return nil, fmt.Errorf("el archivo %s no es un json valido: %w", ruta, err)
 	}
 	return archivo.Eventos, nil
 }
@@ -25,7 +25,7 @@ func LeerEventos(ruta string) ([]model.Evento, error) {
 func GenerarEventos(mes string, cantidad, dobles, asientos int) ([]model.Evento, error) {
 	inicioMes, err := time.Parse("2006-01", mes)
 	if err != nil {
-		return nil, fmt.Errorf("mes %q inválido, use AAAA-MM", mes)
+		return nil, fmt.Errorf("el mes %q no sirve, escribalo como 2026-11", mes)
 	}
 	tipos := []string{"Conciertos", "Obras de teatro", "Partido de futbol", "Carnaval", "Torneos"}
 	var eventos []model.Evento
