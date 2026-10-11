@@ -457,24 +457,3 @@ docker stop srb-pruebas
 Entre ellas está la prueba de concurrencia: 20 reservas simultáneas de 7 asientos sobre 100 asientos deben dejar exactamente 2 libres.
 
 ---
-
-## 13. Detener el sistema
-
-Presione Ctrl+C en cada terminal. El orden no importa.
-
----
-
-## 14. Problemas comunes
-
-| Mensaje | Causa | Solución |
-|---|---|---|
-| `fatal error: zmq.h: No such file or directory` al compilar | Falta libzmq | Instale `libzmq3-dev` y `pkg-config` (sección 2) |
-| `no hay a donde conectarse, falta DATABASE_URL en el .env o el flag -dsn` | No existe `.env` en M3 o la línea está mal escrita | Revise la sección 4.2 |
-| `password authentication failed` | Contraseña incorrecta, con corchetes o con caracteres especiales sin codificar | Revise la sección 4.2 |
-| `no se pudo conectar a PostgreSQL` con timeout | Se usó "Direct connection" o la red bloquea el puerto 5432 | Use la URI de **Session pooler** |
-| `prepared statement ... already exists` | Se usó el Transaction pooler (puerto 6543) | Use el Session pooler (puerto 5432) |
-| `no se pudo abrir tcp://*:5560: address already in use` | Ya hay otra Persistencia corriendo en esa máquina | Deténgala con Ctrl+C o `pkill -x persistence` |
-| `error: tcp://<IP_M2>:5555 no contesto en 5s` | El GT no está corriendo, la IP es incorrecta o el firewall bloquea el puerto | Revise que M2 esté arriba, la IP y la sección 5.2 |
-| `fallo: no hay ningun rmc conectado para atenderla` | El GT está arriba pero RMC no | Revise la terminal de M2 |
-| `fallo: persistencia no contesto, intente otra vez` | RMC no llega a M3 | Revise que M3 esté arriba, `IP_ALMACEN` y el puerto 5560 |
-| `no se pudo aplicar el esquema` | La base tiene tablas de una versión anterior del esquema | En el SQL Editor de Supabase ejecute `DROP SCHEMA srb CASCADE;` y arranque M3 de nuevo |
