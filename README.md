@@ -2,7 +2,7 @@
 
 Primera entrega, arquitectura base. Go + ZeroMQ (pebbe/zmq4) + PostgreSQL (Supabase, driver pgx).
 
-Operaciones implementadas: **Consulta** y **Reserva** (síncronas). El servicio de **Cancelaciones** (asíncrono, con notificación al cliente) también está desplegado.
+Operaciones implementadas: **Consulta** y **Reserva** (síncronas). El servicio de **Cancelaciones** forma parte de la arquitectura y se conecta al GT, pero la operación de cancelar se implementa en la segunda entrega. No se implementa tolerancia a fallas.
 
 ## Requisitos
 
@@ -32,7 +32,7 @@ go test ./...
 
 | Máquina | Capa | Procesos | Puertos |
 |---|---|---|---|
-| M1 | Consumidores | `client` | 6000 (notificaciones) |
+| M1 | Consumidores | `client` | — |
 | M2 | Negocio | `manager` (GT), `rmc`, `cancellations` | 5555 clientes, 5556 RMC, 5557 cancelaciones |
 | M3 | Almacenamiento | `persistence` → PostgreSQL | 5560 |
 
@@ -42,9 +42,8 @@ Patrones ZeroMQ:
 |---|---|
 | Cliente → GT | REQ → ROUTER (síncrono) |
 | GT → RMC | DEALER → REP (síncrono) |
-| RMC / Cancelaciones → Persistencia | REQ → REP |
-| GT → Cancelaciones | PUSH → PULL (asíncrono) |
-| Cancelaciones → Cliente | PUSH → PULL (notificación) |
+| RMC → Persistencia | REQ → REP |
+| GT → Cancelaciones | PUSH → PULL (canal asíncrono; sin operaciones en esta entrega) |
 
 Orden de arranque:
 
@@ -66,25 +65,9 @@ export SRB_GT=tcp://<ip M2>:5555
 ./bin/client consultar -mes 2026-11
 ./bin/client reservar -id Cliente1 -evento E1 -asientos 5
 ./bin/client concurrente -evento E2 -asientos 30,25,40,20,15
-./bin/client cancelar -id Cliente1 -reserva R0001 -ipnotif <ip M1>
-./bin/client carga -config tests/scenario1.json
 ```
 
 ## Ver la base de datos
 
 - Terminal (M3): `./bin/persistence -ver`
 - Supabase Studio → Table Editor → esquema `srb` → `vista_ocupacion`, `reservas`
-
-## Pruebas de rendimiento
-
-Escenarios del enunciado en `tests/scenario1.json`, `tests/scenario2.json` y `tests/scenario3.json` (3, 5 y 8 clientes, 150 s con 15 s de calentamiento, al menos 20 solicitudes por minuto por cliente).
-
-```bash
-# M3: 50 eventos y registro de TPM en la BD
-./scripts/machine3_storage.sh -generar -tabla=false -metricas metrics/persistencia_s1.csv
-
-# M1: genera la carga e imprime promedio, desviación estándar, P95 y TPM por operación
-./bin/client carga -config tests/scenario1.json
-```
-
-Los resultados por solicitud quedan en `metrics/*.csv`.

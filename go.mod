@@ -5,7 +5,6 @@ go 1.25.0
 require (
 	github.com/jackc/pgx/v5 v5.11.0
 	github.com/pebbe/zmq4 v1.4.0
-	gonum.org/v1/gonum v0.17.0
 )
 
 require (

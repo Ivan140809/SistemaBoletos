@@ -11,7 +11,7 @@ import (
 )
 
 func TestGenerarEventos(t *testing.T) {
-  eventos, err := GenerarEventos("2026-11", 50, 20, 100)
+	eventos, err := GenerarEventos("2026-11", 50, 20, 100)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -82,27 +82,6 @@ func TestSolicitudRepetidaNoSeEjecutaDosVeces(t *testing.T) {
 	}
 	libres, _ := base.Disponibilidad(ctx, "E1", 1)
 	if libres != 95 || segunda.Reserva == nil || primera.Reserva.IdReserva != segunda.Reserva.IdReserva {
-		t.Fatalf("la solicitud repetida se ejecutó dos veces: quedan %d libres", libres)
-	}
-}
-
-func TestCancelacionLiberaAsientos(t *testing.T) {
-	base := baseDePrueba(t)
-	ctx := context.Background()
-	creada, err := base.CrearReserva(ctx, pedirReserva("S1", "C1", "E1", 10))
-	if err != nil || !creada.Exito {
-		t.Fatal(err, creada.Mensaje)
-	}
-	cancelacion := model.Solicitud{IdSolicitud: "S2", IdCliente: "C1", Tipo: model.TipoCancelacion, IdReserva: creada.Reserva.IdReserva}
-	if resp, err := base.CancelarReserva(ctx, cancelacion); err != nil || !resp.Exito {
-		t.Fatal(err, resp.Mensaje)
-	}
-	if libres, _ := base.Disponibilidad(ctx, "E1", 1); libres != 100 {
-		t.Fatalf("se esperaban 100 libres, hay %d", libres)
-	}
-	ajena := cancelacion
-	ajena.IdSolicitud, ajena.IdCliente = "S3", "C2"
-	if resp, _ := base.CancelarReserva(ctx, ajena); resp.Exito {
-		t.Fatal("un cliente canceló una reserva ajena")
+		t.Fatalf("la solicitud repetida se ejecutó dos veces, quedan %d libres", libres)
 	}
 }

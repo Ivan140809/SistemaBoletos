@@ -4,14 +4,12 @@ import (
 	"encoding/json"
 	"flag"
 	"fmt"
+	zmq "github.com/pebbe/zmq4"
 	"log"
 	"os"
-	"time"
-
-	zmq "github.com/pebbe/zmq4"
-
 	"sistemaboletos/internal/communication"
 	"sistemaboletos/internal/model"
+	"time"
 )
 
 func main() {
@@ -22,7 +20,7 @@ func main() {
 	flag.Parse()
 
 	log.SetOutput(os.Stdout)
-	log.SetPrefix(fmt.Sprintf("[%s] ", *id))
+	log.SetPrefix(*id + " ")
 	log.SetFlags(log.Ltime | log.Lmicroseconds)
 
 	socket, err := zmq.NewSocket(zmq.REP)

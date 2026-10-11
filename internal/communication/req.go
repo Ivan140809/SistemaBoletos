@@ -1,30 +1,31 @@
 package communication
+
 import (
 	"encoding/json"
 	"fmt"
-	"time"
 	zmq "github.com/pebbe/zmq4"
+	"time"
 )
 
 type ClienteReq struct {
 	endpoint string
-	timeout time.Duration
-	socket*zmq.Socket
+	timeout  time.Duration
+	socket   *zmq.Socket
 }
 
 func NuevoClienteReq(endpoint string, timeout time.Duration) (*ClienteReq, error) {
- c := &ClienteReq{endpoint: endpoint, timeout: timeout}
+	c := &ClienteReq{endpoint: endpoint, timeout: timeout}
 	if err := c.conectar(); err != nil {
 		return nil, err
 	}
 	return c, nil
 }
 func (c *ClienteReq) conectar() error {
-  socket, err := zmq.NewSocket(zmq.REQ)
+	socket, err := zmq.NewSocket(zmq.REQ)
 	if err != nil {
 		return err
 	}
-	socket.SetLinger(0) // para que no se quede esperando a que se envíe el mensaje
+	socket.SetLinger(0)           // para que no se quede esperando a que se envíe el mensaje
 	socket.SetRcvtimeo(c.timeout) // para que no se quede esperando a que llegue la respuesta
 	socket.SetSndtimeo(c.timeout) // para que no se quede bloqueado esperando la repuesta
 	if err := socket.Connect(c.endpoint); err != nil {

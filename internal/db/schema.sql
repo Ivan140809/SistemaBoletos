@@ -28,7 +28,6 @@ id_ocurrencia integer NOT NULL,
 cantidad_asientos  integer NOT NULL CHECK (cantidad_asientos > 0),
 estado text NOT NULL DEFAULT 'ACTIVA' CHECK (estado IN ('ACTIVA', 'CANCELADA')),
 creada_en timestamptz NOT NULL DEFAULT now(),
-cancelada_en timestamptz,
 FOREIGN KEY (id_evento, id_ocurrencia) REFERENCES srb.ocurrencias (id_evento, id_ocurrencia)
 );
 
@@ -120,53 +119,6 @@ IF NOT FOUND THEN
             'exito', true,
             'mensaje', format('reserva %s confirmada: %s asientos en %s/%s, quedan %s', v_reserva.id_reserva, p_cantidad, p_id_evento, p_id_ocurrencia, v_disponibles),
             'reserva', srb.reserva_json(v_reserva));
-    END IF;
-
-    UPDATE srb.solicitudes_procesadas SET respuesta = v_respuesta WHERE id_solicitud = p_id_solicitud;
-    RETURN v_respuesta;
-END;
-$$;
-
-CREATE OR REPLACE FUNCTION srb.cancelar_reserva(
-p_id_solicitud text,
-p_id_cliente   text,
-p_id_reserva   text)
-RETURNS jsonb
-LANGUAGE plpgsql AS $$
-DECLARE
-v_respuesta   jsonb;
-v_reserva     srb.reservas;
-v_disponibles integer;
-BEGIN
-INSERT INTO srb.solicitudes_procesadas (id_solicitud, operacion)
-VALUES (p_id_solicitud, 'cancelar_reserva')
-ON CONFLICT (id_solicitud) DO NOTHING;
-IF NOT FOUND THEN
-    SELECT respuesta INTO v_respuesta FROM srb.solicitudes_procesadas WHERE id_solicitud = p_id_solicitud;
-    RETURN v_respuesta;
-END IF;
-SELECT * INTO v_reserva FROM srb.reservas WHERE id_reserva = p_id_reserva FOR UPDATE;  -- bloquea la reserva mientras se cancela
-IF NOT FOUND THEN
-    v_respuesta := srb.rechazo(p_id_solicitud, format('la reserva %s no existe', p_id_reserva));
-ELSIF v_reserva.id_cliente <> p_id_cliente THEN
-    v_respuesta := srb.rechazo(p_id_solicitud, format('la reserva %s pertenece a otro cliente', p_id_reserva));
-ELSIF v_reserva.estado = 'CANCELADA' THEN
-    v_respuesta := srb.rechazo(p_id_solicitud, format('la reserva %s ya estaba cancelada', p_id_reserva));
-ELSE
-    UPDATE srb.reservas
-        SET estado = 'CANCELADA', cancelada_en = now()
-    WHERE id_reserva = p_id_reserva
-    RETURNING * INTO v_reserva;
-    UPDATE srb.ocurrencias
-        SET asientos_disponibles = asientos_disponibles + v_reserva.cantidad_asientos,
-            asientos_vendidos    = asientos_vendidos - v_reserva.cantidad_asientos
-    WHERE id_evento = v_reserva.id_evento AND id_ocurrencia = v_reserva.id_ocurrencia
-    RETURNING asientos_disponibles INTO v_disponibles;
-    v_respuesta := jsonb_build_object(
-        'id_solicitud', p_id_solicitud,
-        'exito', true,
-        'mensaje', format('reserva %s cancelada: se liberaron %s asientos de %s/%s, quedan %s', v_reserva.id_reserva, v_reserva.cantidad_asientos, v_reserva.id_evento, v_reserva.id_ocurrencia, v_disponibles),
-        'reserva', srb.reserva_json(v_reserva));
     END IF;
 
     UPDATE srb.solicitudes_procesadas SET respuesta = v_respuesta WHERE id_solicitud = p_id_solicitud;

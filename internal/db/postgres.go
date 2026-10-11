@@ -1,16 +1,16 @@
 package db
 
 import (
- "context"
- _ "embed"
- "encoding/json"
- "errors"
-  "fmt"
-  "strings"
-   "time"
-   "github.com/jackc/pgx/v5"
-  "github.com/jackc/pgx/v5/pgxpool"
+	"context"
+	_ "embed"
+	"encoding/json"
+	"errors"
+	"fmt"
+	"github.com/jackc/pgx/v5"
+	"github.com/jackc/pgx/v5/pgxpool"
 	"sistemaboletos/internal/model"
+	"strings"
+	"time"
 )
 
 //go:embed schema.sql
@@ -53,7 +53,7 @@ func (b *BaseDatos) Reiniciar(ctx context.Context, eventos []model.Evento) error
 		if _, err := tx.Exec(ctx, `TRUNCATE srb.solicitudes_procesadas, srb.reservas, srb.ocurrencias, srb.events`); err != nil {
 			return err
 		}
-		if _, err := tx.Exec(ctx, `ALTER SEQUENCE srb.reservas_seq RESTART`); err != nil { // las reservas vuelven a empezar en R0001
+		if _, err := tx.Exec(ctx, `ALTER SEQUENCE srb.reservas_seq RESTART`); err != nil {
 			return err
 		}
 		var filasEventos, filasOcurrencias [][]any
@@ -106,10 +106,6 @@ func (b *BaseDatos) CrearReserva(ctx context.Context, s model.Solicitud) (model.
 	return b.llamar(ctx, `SELECT srb.crear_reserva($1, $2, $3, $4, $5)`, s.IdSolicitud, s.IdCliente, s.IdEvento, s.IdOcurrencia, s.CantidadAsientos)
 }
 
-func (b *BaseDatos) CancelarReserva(ctx context.Context, s model.Solicitud) (model.Respuesta, error) {
-	return b.llamar(ctx, `SELECT srb.cancelar_reserva($1, $2, $3)`, s.IdSolicitud, s.IdCliente, s.IdReserva)
-}
-
 func (b *BaseDatos) llamar(ctx context.Context, sql string, argumentos ...any) (model.Respuesta, error) {
 	var datos []byte
 	if err := b.pool.QueryRow(ctx, sql, argumentos...).Scan(&datos); err != nil { // la función corre como una transacción completa
@@ -136,31 +132,38 @@ func (b *BaseDatos) Tabla(ctx context.Context, conReservas bool) (string, error)
 	}
 	var sb strings.Builder
 	sb.WriteString(model.TablaEventos(eventos))
-	var activas, canceladas int
-	if err := b.pool.QueryRow(ctx, `
-		SELECT count(*) FILTER (WHERE estado = 'ACTIVA'), count(*) FILTER (WHERE estado = 'CANCELADA')
-		FROM srb.reservas`).Scan(&activas, &canceladas); err != nil {
+	var reservas int
+	if err := b.pool.QueryRow(ctx, `SELECT count(*) FROM srb.reservas`).Scan(&reservas); err != nil {
 		return "", err
 	}
-	fmt.Fprintf(&sb, "Reservas activas: %d | canceladas: %d\n", activas, canceladas)
-	if !conReservas || activas+canceladas == 0 {
+	if reservas == 0 {
+		sb.WriteString("Todavía no hay reservas.\n")
+		return sb.String(), nil
+	}
+	fmt.Fprintf(&sb, "Reservas hechas: %d\n", reservas)
+	if !conReservas {
 		return sb.String(), nil
 	}
 	filasReservas, err := b.pool.Query(ctx, `
-		SELECT id_reserva, id_cliente, id_evento, id_ocurrencia, cantidad_asientos, estado
-		FROM srb.reservas
-		ORDER BY creada_en, id_reserva`)
+		SELECT r.id_reserva, r.id_cliente, r.id_evento, r.cantidad_asientos, o.fecha
+		FROM srb.reservas r
+		JOIN srb.ocurrencias o ON o.id_evento = r.id_evento AND o.id_ocurrencia = r.id_ocurrencia
+		ORDER BY r.creada_en, r.id_reserva`)
 	if err != nil {
 		return "", err
 	}
 	defer filasReservas.Close()
-	fmt.Fprintf(&sb, "  %-8s %-16s %-7s %-3s %8s  %s\n", "Reserva", "Cliente", "Evento", "Oc", "Asientos", "Estado")
 	for filasReservas.Next() {
 		var r model.Reserva
-		if err := filasReservas.Scan(&r.IdReserva, &r.IdCliente, &r.IdEvento, &r.IdOcurrencia, &r.CantidadAsientos, &r.Estado); err != nil {
+		var fecha time.Time
+		if err := filasReservas.Scan(&r.IdReserva, &r.IdCliente, &r.IdEvento, &r.CantidadAsientos, &fecha); err != nil {
 			return "", err
 		}
-		fmt.Fprintf(&sb, "  %-8s %-16s %-7s %-3d %8d  %s\n", r.IdReserva, r.IdCliente, r.IdEvento, r.IdOcurrencia, r.CantidadAsientos, r.Estado)
+		palabra := "asientos"
+		if r.CantidadAsientos == 1 {
+			palabra = "asiento"
+		}
+		fmt.Fprintf(&sb, "   - %s: %s reservó %d %s de %s para el %s\n", r.IdReserva, r.IdCliente, r.CantidadAsientos, palabra, r.IdEvento, model.FechaLegible(fecha.Format("2006-01-02")))
 	}
 	return sb.String(), filasReservas.Err()
 }
