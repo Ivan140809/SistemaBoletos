@@ -81,7 +81,6 @@ func consultar(per *communication.ClienteReq, s model.Solicitud) model.Respuesta
 
 func reservar(per *communication.ClienteReq, s model.Solicitud) model.Respuesta {
 	var disponibilidad model.Respuesta
-	// paso 2 del enunciado: consultar la disponibilidad en tiempo real
 	if err := per.Pedir(model.PeticionDB{Operacion: model.OpConsultarDisponibilidad, Solicitud: s}, &disponibilidad); err != nil {
 		return sinPersistencia(s, err)
 	}
@@ -94,7 +93,6 @@ func reservar(per *communication.ClienteReq, s model.Solicitud) model.Respuesta 
 		return resp
 	}
 	var confirmacion model.Respuesta
-	// paso 3: confirmar en la BD; Persistencia vuelve a verificar y guarda en una sola transacción
 	if err := per.Pedir(model.PeticionDB{Operacion: model.OpCrearReserva, Solicitud: s}, &confirmacion); err != nil {
 		return sinPersistencia(s, err)
 	}

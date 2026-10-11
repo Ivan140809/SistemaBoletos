@@ -13,69 +13,69 @@ type TipoSolicitud string
 
 const (
 	TipoConsulta TipoSolicitud = "consulta"
-	TipoReserva  TipoSolicitud = "reserva"
+	TipoReserva TipoSolicitud = "reserva"
 )
 
 type OperacionDB string
 
 const (
-	OpConsultarEventos        OperacionDB = "consultar_eventos"
+	OpConsultarEventos OperacionDB = "consultar_eventos"
 	OpConsultarDisponibilidad OperacionDB = "consultar_disponibilidad"
-	OpCrearReserva            OperacionDB = "crear_reserva"
+	OpCrearReserva OperacionDB = "crear_reserva"
 )
 const (
-	ReservaActiva    = "ACTIVA"
+	ReservaActiva = "ACTIVA"
 	ReservaCancelada = "CANCELADA"
 )
 
 type Ocurrencia struct {
-	IdOcurrencia        int    `json:"id_ocurrencia"`
-	Fecha               string `json:"fecha"`
-	CapacidadTotal      int    `json:"capacidad_total"`
-	AsientosDisponibles int    `json:"asientos_disponibles"`
-	AsientosVendidos    int    `json:"asientos_vendidos"`
+	IdOcurrencia int `json:"id_ocurrencia"`
+	Fecha string `json:"fecha"`
+	CapacidadTotal int `json:"capacidad_total"`
+	AsientosDisponibles int `json:"asientos_disponibles"`
+	AsientosVendidos int `json:"asientos_vendidos"`
 }
 type Evento struct {
-	IdEvento    string       `json:"id_evento"`
-	Nombre      string       `json:"nombre"`
+	IdEvento string `json:"id_evento"`
+	Nombre string `json:"nombre"`
 	Ocurrencias []Ocurrencia `json:"ocurrencias"`
 }
 
 type Reserva struct {
-	IdReserva        string    `json:"id_reserva"`
-	IdCliente        string    `json:"id_cliente"`
-	IdOcurrencia     int       `json:"id_ocurrencia"`
-	IdEvento         string    `json:"id_evento"`
-	CantidadAsientos int       `json:"cantidad_asientos"`
-	Estado           string    `json:"estado"`
-	Creada           string    `json:"creada"`
-	FechaHora        time.Time `json:"fecha_hora"`
+	IdReserva string `json:"id_reserva"`
+	IdCliente string `json:"id_cliente"`
+	IdOcurrencia int `json:"id_ocurrencia"`
+	IdEvento string `json:"id_evento"`
+	CantidadAsientos int `json:"cantidad_asientos"`
+	Estado string `json:"estado"`
+	Creada string `json:"creada"`
+	FechaHora time.Time `json:"fecha_hora"`
 }
 
 type Solicitud struct {
-	IdSolicitud      string        `json:"id_solicitud"` //idempotencia con IDs
-	IdCliente        string        `json:"id_cliente"`
-	Tipo             TipoSolicitud `json:"tipo"`
-	Mes              string        `json:"mes,omitempty"`
-	IdEvento         string        `json:"id_evento"`
-	IdOcurrencia     int           `json:"id_ocurrencia"`
-	CantidadAsientos int           `json:"cantidad_asientos"`
-	FechaHora        time.Time     `json:"fecha_hora"`
+	IdSolicitud string `json:"id_solicitud"` //idempotencia con IDs
+	IdCliente string `json:"id_cliente"`
+	Tipo TipoSolicitud `json:"tipo"`
+	Mes string `json:"mes,omitempty"`
+	IdEvento string `json:"id_evento"`
+	IdOcurrencia int `json:"id_ocurrencia"`
+	CantidadAsientos int `json:"cantidad_asientos"`
+	FechaHora time.Time `json:"fecha_hora"`
 }
 
 type Respuesta struct {
-	IdSolicitud         string   `json:"id_solicitud"`
-	Exito               bool     `json:"exito"`
-	Mensaje             string   `json:"mensaje"`
-	Eventos             []Evento `json:"eventos,omitempty"`
-	Reserva             *Reserva `json:"reserva,omitempty"`
-	AsientosDisponibles int      `json:"asientos_disponibles,omitempty"`
-	Instancia           string   `json:"instancia,omitempty"` //instancia del servicio que atendio la solicitud
+	IdSolicitud string `json:"id_solicitud"`
+	Exito bool `json:"exito"`
+	Mensaje string `json:"mensaje"`
+	Eventos []Evento `json:"eventos,omitempty"`
+	Reserva *Reserva `json:"reserva,omitempty"`
+	AsientosDisponibles int `json:"asientos_disponibles,omitempty"`
+	Instancia string `json:"instancia,omitempty"` //instancia del servicio que atendio la solicitud
 }
 
 type PeticionDB struct {
 	Operacion OperacionDB `json:"operacion"`
-	Solicitud Solicitud   `json:"solicitud"`
+	Solicitud Solicitud `json:"solicitud"`
 }
 
 func NuevoID(prefijo string) string {

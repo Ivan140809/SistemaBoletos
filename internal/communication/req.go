@@ -9,8 +9,8 @@ import (
 
 type ClienteReq struct {
 	endpoint string
-	timeout  time.Duration
-	socket   *zmq.Socket
+	timeout time.Duration
+	socket *zmq.Socket
 }
 
 func NuevoClienteReq(endpoint string, timeout time.Duration) (*ClienteReq, error) {
@@ -25,7 +25,7 @@ func (c *ClienteReq) conectar() error {
 	if err != nil {
 		return err
 	}
-	socket.SetLinger(0)           // para que no se quede esperando a que se envíe el mensaje
+	socket.SetLinger(0) // para que no se quede esperando a que se envíe el mensaje
 	socket.SetRcvtimeo(c.timeout) // para que no se quede esperando a que llegue la respuesta
 	socket.SetSndtimeo(c.timeout) // para que no se quede bloqueado esperando la repuesta
 	if err := socket.Connect(c.endpoint); err != nil {

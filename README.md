@@ -292,14 +292,11 @@ E2 AESS charla
 
 5. varios clientes reservan E2 al mismo tiempo
 salen 5 clientes al mismo tiempo por E2 en la fecha 1, entre todos piden 130 asientos
-
-Cliente           Pidio       Tiempo  Resultado
-Concurrente-5        15     11.666ms exito reserva R0003 lista, 15 asientos de E2 en la fecha 1, quedan 85 libres
-Concurrente-1        30     15.783ms exito reserva R0004 lista, 30 asientos de E2 en la fecha 1, quedan 55 libres
-Concurrente-2        25     20.327ms exito reserva R0005 lista, 25 asientos de E2 en la fecha 1, quedan 30 libres
-Concurrente-3        40     21.489ms fallo no alcanzan los asientos de E2 en la fecha 1, pidio 40 asientos y solo quedan 30
-Concurrente-4        20     23.526ms exito reserva R0006 lista, 20 asientos de E2 en la fecha 1, quedan 10 libres
-
+Concurrente-5 pidio 15 asientos, exito: reserva R0003 lista, 15 asientos de E2 en la fecha 1, quedan 85 libres (11.666ms)
+Concurrente-1 pidio 30 asientos, exito: reserva R0004 lista, 30 asientos de E2 en la fecha 1, quedan 55 libres (15.783ms)
+Concurrente-2 pidio 25 asientos, exito: reserva R0005 lista, 25 asientos de E2 en la fecha 1, quedan 30 libres (20.327ms)
+Concurrente-3 pidio 40 asientos, fallo: no alcanzan los asientos de E2 en la fecha 1, pidio 40 asientos y solo quedan 30 (21.489ms)
+Concurrente-4 pidio 20 asientos, exito: reserva R0006 lista, 20 asientos de E2 en la fecha 1, quedan 10 libres (23.526ms)
 4 clientes consiguieron puesto, 1 se quedo sin puesto y se vendieron 90 de los 130 asientos pedidos
 
 6. asi queda la base al final

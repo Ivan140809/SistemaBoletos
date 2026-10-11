@@ -14,16 +14,16 @@ import (
 )
 
 type opcionesComunes struct {
-	gt      *string
-	id      *string
+	gt *string
+	id *string
 	timeout *time.Duration
 }
 
 type resultadoConcurrente struct {
-	cliente  string
-	pedidos  int
-	resp     model.Respuesta
-	err      error
+	cliente string
+	pedidos int
+	resp model.Respuesta
+	err error
 	duracion time.Duration
 }
 
@@ -61,8 +61,8 @@ comandos:
 
 func opciones(fs *flag.FlagSet, idPorDefecto string) opcionesComunes {
 	return opcionesComunes{
-		gt:      fs.String("gt", entorno("SRB_GT", "tcp://localhost:5555"), "endpoint del Gestor de Transacciones"),
-		id:      fs.String("id", idPorDefecto, "identificador del cliente"),
+		gt: fs.String("gt", entorno("SRB_GT", "tcp://localhost:5555"), "endpoint del Gestor de Transacciones"),
+		id: fs.String("id", idPorDefecto, "identificador del cliente"),
 		timeout: fs.Duration("timeout", 5*time.Second, "cuanto esperar la respuesta"),
 	}
 }
@@ -171,25 +171,24 @@ func concurrente(argumentos []string) error {
 	}
 	conectados.Wait()
 	time.Sleep(300 * time.Millisecond)
-	fmt.Printf("salen %d clientes al mismo tiempo por %s en la fecha %d, entre todos piden %d asientos\n\n", len(cantidades), *evento, *ocurrencia, total)
+	fmt.Printf("salen %d clientes al mismo tiempo por %s en la fecha %d, entre todos piden %d asientos\n", len(cantidades), *evento, *ocurrencia, total)
 	close(salida)
 	terminados.Wait()
 
 	sort.Slice(resultados, func(a, b int) bool { return resultados[a].duracion < resultados[b].duracion }) // orden aproximado de atención
 	concedidos, aceptados := 0, 0
-	fmt.Printf("%-16s %6s %12s  %s\n", "Cliente", "Pidio", "Tiempo", "Resultado")
 	for _, r := range resultados {
 		if r.err != nil {
-			fmt.Printf("%-16s %6d %12s  %s %v\n", r.cliente, r.pedidos, "-", model.Resultado(false), r.err)
+			fmt.Printf("%s pidio %s, %s: %v\n", r.cliente, model.Asientos(r.pedidos), model.Resultado(false), r.err)
 			continue
 		}
 		if r.resp.Exito {
 			concedidos += r.pedidos
 			aceptados++
 		}
-		fmt.Printf("%-16s %6d %12v %s %s\n", r.cliente, r.pedidos, r.duracion.Round(time.Microsecond), model.Resultado(r.resp.Exito), r.resp.Mensaje)
+		fmt.Printf("%s pidio %s, %s: %s (%v)\n", r.cliente, model.Asientos(r.pedidos), model.Resultado(r.resp.Exito), r.resp.Mensaje, r.duracion.Round(time.Microsecond))
 	}
-	fmt.Printf("\n%s, %s y se vendieron %d de los %d asientos pedidos\n", cuantos(aceptados, "cliente consiguio puesto", "clientes consiguieron puesto"), cuantos(len(resultados)-aceptados, "se quedo sin puesto", "se quedaron sin puesto"), concedidos, total)
+	fmt.Printf("%s, %s y se vendieron %d de los %d asientos pedidos\n", cuantos(aceptados, "cliente consiguio puesto", "clientes consiguieron puesto"), cuantos(len(resultados)-aceptados, "se quedo sin puesto", "se quedaron sin puesto"), concedidos, total)
 	return nil
 }
 

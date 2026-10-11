@@ -25,7 +25,7 @@ id_reserva text PRIMARY KEY,
 id_cliente text NOT NULL,
 id_evento text NOT NULL,
 id_ocurrencia integer NOT NULL,
-cantidad_asientos  integer NOT NULL CHECK (cantidad_asientos > 0),
+cantidad_asientos integer NOT NULL CHECK (cantidad_asientos > 0),
 estado text NOT NULL DEFAULT 'ACTIVA' CHECK (estado IN ('ACTIVA', 'CANCELADA')),
 creada_en timestamptz NOT NULL DEFAULT now(),
 FOREIGN KEY (id_evento, id_ocurrencia) REFERENCES srb.ocurrencias (id_evento, id_ocurrencia)
@@ -94,7 +94,7 @@ END IF;
 
 UPDATE srb.ocurrencias
     SET asientos_disponibles = asientos_disponibles - p_cantidad,
-        asientos_vendidos    = asientos_vendidos + p_cantidad
+        asientos_vendidos = asientos_vendidos + p_cantidad
     WHERE id_evento = p_id_evento
       AND id_ocurrencia = p_id_ocurrencia
       AND asientos_disponibles >= p_cantidad
