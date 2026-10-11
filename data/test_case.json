@@ -1,0 +1,18 @@
+{
+  "eventos": [
+    {
+      "id_evento": "E1",
+      "nombre": "Concierto Orquesta Javeriana",
+      "ocurrencias": [
+        { "id_ocurrencia": 1, "fecha": "2026-11-14", "capacidad_total": 100, "asientos_disponibles": 100, "asientos_vendidos": 0 }
+      ]
+    },
+    {
+      "id_evento": "E2",
+      "nombre": "Final Fútbol Interfacultades",
+      "ocurrencias": [
+        { "id_ocurrencia": 1, "fecha": "2026-11-21", "capacidad_total": 100, "asientos_disponibles": 100, "asientos_vendidos": 0 }
+      ]
+    }
+  ]
+}
