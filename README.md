@@ -2,34 +2,32 @@
 
 Sistema distribuido para consultar eventos y reservar asientos. Está escrito en Go, sus componentes se comunican con ZeroMQ y los datos se guardan en Supabase.
 
-Operaciones disponibles:
+Operaciones disponibles hasta el momento:
 
 - **Consulta**: lista los eventos de un mes con sus asientos libres y vendidos.
 - **Reserva**: reserva asientos de un evento en una fecha. Si no alcanzan, la reserva se rechaza y la base queda igual.
 
-Ambas son síncronas: el cliente espera la respuesta.
-
+Se implementan las operaciones de consulta y reserva de forma sincrona. 
 ---
 
-## 1. Cómo está armado
+## 1. Cómo se propone la arquitectura base
 
 El sistema tiene tres capas y cada una corre en su propia máquina:
-
-| Máquina | Capa | Procesos | Qué hace |
+| Máquina | Capa | Donde esta en el programa | Qué hace |
 |---|---|---|---|
-| **M1** | Consumidores | `client` | Envía consultas y reservas |
-| **M2** | Negocio | `manager` (Gestor de Transacciones, GT), `rmc`, `cancellations` | El GT recibe las solicitudes, las valida y se las pasa a RMC. RMC consulta la disponibilidad y confirma la reserva. |
-| **M3** | Almacenamiento | `persistence` | Es el único proceso que habla con la base de datos
+| **1** | Consumidores | `client` | Envía consultas y reservas |
+| **2** | Negocio | `manager` (Gestor de Transacciones, GT), `rmc` | El GT recibe las solicitudes, las valida y se las pasa a RMC. RMC consulta la disponibilidad y confirma la reserva. |
+| **3** | Almacenamiento | `persistence` | Es el único proceso que habla con la base de datos en supabase
 
 Cómo se conectan los procesos:
 
-| Origen | Destino | Patrón ZeroMQ | Puerto (quién lo abre) |
+| Origen | Destino | Patron | Puerto|
 |---|---|---|---|
 | `client` (M1) | `manager` (M2) | REQ / ROUTER | 5555 en M2 |
 | `manager` (M2) | `rmc` (M2) | DEALER / REP | 5556 en M2 |
 | `manager` (M2) | `cancellations` (M2) | PUSH / PULL | 5557 en M2 |
 | `rmc` (M2) | `persistence` (M3) | REQ / REP | 5560 en M3 |
-| `persistence` (M3) | Supabase | PostgreSQL | 5432 en Supabase (por internet) |
+| `persistence` (M3) | Supabase | PostgreSQL | 5432 en Supabase |
 
 Recorrido de una reserva: el cliente envía la solicitud al GT, el GT la valida y se la pasa a RMC, RMC le pregunta a Persistencia cuántos asientos quedan y, si alcanzan, le pide guardarla. La respuesta regresa por el mismo camino.
 
@@ -63,11 +61,6 @@ Recorrido de una reserva: el cliente envía la solicitud al GT, el GT la valida 
 sudo apt update
 sudo apt install -y libzmq3-dev pkg-config build-essential git
 ```
-
-La versión de Go que trae `apt` suele ser vieja. Es mejor instalarla desde https://go.dev/dl descargando el archivo `goX.Y.Z.linux-amd64.tar.gz` más reciente:
-
-
-
 ## 3. Descargar y compilar 
 
 ```bash
@@ -84,13 +77,9 @@ Al terminar debe existir la carpeta `bin/` con cinco programas:
 ```bash
 ls bin/
 ```
-
-Cada máquina solo usa algunos de ellos, pero compilar todo en las tres no estorba y evita confusiones.
-
 ---
 
 ## 4. Preparar la base de datos 
-
 
 ### 4.1 Crear el archivo `.env`
 
@@ -105,30 +94,7 @@ Abra `.env` y deje la primera línea así, con la URI copiada:
 ```bash
 DATABASE_URL='postgresql://postgres.abcdefghijk:SuPassword123@aws-0-us-east-1.pooler.supabase.com:5432/postgres?sslmode=require'
 ```
-
-Revise tres cosas:
-
-- **Quite los corchetes** de `[YOUR-PASSWORD]`. Solo marcan dónde va la contraseña; no son parte de ella.
 - **Agregue `?sslmode=require`** al final.
-- Si la contraseña tiene caracteres especiales, escríbalos codificados: `@` como `%40`, `#` como `%23`, `/` como `%2F`, `?` como `%3F`, `&` como `%26`. Lo más simple es usar una contraseña solo con letras y números.
-
-El archivo `.env` contiene la contraseña: no se sube a git (está en `.gitignore`) y no debe compartirse.
-
-
-### Alternativa sin Supabase: PostgreSQL local
-
-Si M3 no tiene internet o no se quiere usar Supabase, el mismo código funciona con un PostgreSQL local en Docker:
-
-```bash
-docker run -d --name srb-postgres -e POSTGRES_PASSWORD=postgres -p 5432:5432 postgres:16
-```
-
-En ese caso la línea del `.env` queda:
-
-```bash
-DATABASE_URL='postgres://postgres:postgres@localhost:5432/postgres?sslmode=disable'
-```
-
 ---
 
 ## 5. Conectar las máquinas
@@ -169,13 +135,13 @@ sudo ufw allow 5555:5557/tcp
 sudo ufw allow 5560/tcp
 ```
 
-M3 además necesita salida a internet para llegar a Supabase (puerto 5432). Normalmente ya está permitida.
+M3 además necesita salida a internet para llegar a Supabase (puerto 5432).
 
 ---
 
 ## 6. Arrancar el sistema
 
-El orden importa: primero M3, luego M2 y al final M1.
+El orden: primero M3, luego M2 y al final M1.
 
 ### 6.1 M3: Persistencia
 
@@ -435,22 +401,4 @@ IP_ALMACEN=localhost ./scripts/machine2_business.sh
 IP_NEGOCIO=localhost ./scripts/test_case.sh
 ```
 
----
 
-## 12. Pruebas automáticas
-
-```bash
-go test ./...
-```
-
-Las pruebas que usan la base de datos **borran sus datos** antes de correr. Por eso solo se ejecutan si se define `SRB_TEST_DATABASE_URL`, y esa variable debe apuntar a un PostgreSQL desechable, nunca a Supabase:
-
-```bash
-docker run -d --rm --name srb-pruebas -e POSTGRES_PASSWORD=postgres -p 5433:5432 postgres:16
-SRB_TEST_DATABASE_URL='postgres://postgres:postgres@localhost:5433/postgres?sslmode=disable' go test -v ./internal/db/
-docker stop srb-pruebas
-```
-
-Entre ellas está la prueba de concurrencia: 20 reservas simultáneas de 7 asientos sobre 100 asientos deben dejar exactamente 2 libres.
-
----
