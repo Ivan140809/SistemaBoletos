@@ -1,9 +1,18 @@
 #!/usr/bin/env bash
+# ESCENARIO DE DEMOSTRACIÓN CON CASOS BORDE (se ejecuta en la M1, el cliente).
+# Prueba cosas que deben FALLAR bien: fecha inexistente, evento inexistente,
+# solicitudes mal formadas (las frena el GT), evento agotado y competencia
+# concurrente por los últimos asientos.
+# Requisito: M3 arrancada con OTRO caso de prueba:
+#   ./scripts/machine3_storage.sh -inicial data/custom_case.json
+# Uso:   IP_NEGOCIO=<IP_de_M2> ./scripts/custom_cases.sh
 set -euo pipefail
 cd "$(dirname "$0")/.."
 : "${IP_NEGOCIO:?falta IP_NEGOCIO, la ip de la maquina 2}"
+# Dirección del Gestor de Transacciones (puerto 5555 de la M2).
 GT="tcp://${IP_NEGOCIO}:5555"
 
+# Función auxiliar: imprime el texto del paso ($1) y pausa hasta que se presione ENTER.
 paso() {
 	echo "$1"
 	read -rp "enter para seguir"

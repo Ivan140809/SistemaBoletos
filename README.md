@@ -1,26 +1,26 @@
 # SRB: Sistema de Reserva de Boletos
 
-Sistema distribuido para consultar eventos y reservar asientos. Está escrito en Go, sus componentes se comunican con ZeroMQ y los datos se guardan en Supabase.
+Sistema distribuido de tres capas para consultar eventos y reservar asientos, desarrollado como proyecto del curso Introducción a Sistemas Distribuidos. Los procesos están escritos en Go, se comunican mediante ZeroMQ, y el estado se persiste en PostgreSQL (Supabase).
 
 Operaciones disponibles hasta el momento:
 
 - **Consulta**: lista los eventos de un mes con sus asientos libres y vendidos.
-- **Reserva**: reserva asientos de un evento en una fecha. Si no alcanzan, la reserva se rechaza y la base queda igual.
+- **Reserva**: reserva asientos de un evento en una fecha. Si no alcanzan, la reserva se rechaza y la base no cambia.
 
 Se implementan las operaciones de consulta y reserva de forma sincrona.
 
-## 1. Lo que usamos
+## 1. Tecnologías
 
-- **Go 1.25**: todos los procesos del sistema.
-- **ZeroMQ** (librería `pebbe/zmq4`): comunicación entre procesos con los patrones REQ/ROUTER, DEALER/REP, REQ/REP y PUSH/PULL.
-- **PostgreSQL en Supabase** (driver `pgx`): la base de datos. Las tablas y las funciones de reserva están en `internal/db/schema.sql`.
-- **Scripts de bash**: para arrancar cada máquina.
+- **Go 1.25**: Todos los procesos del sistema.
+- **ZeroMQ** (librería `pebbe/zmq4`): Comunicación entre procesos con los patrones REQ/ROUTER, DEALER/REP, REQ/REP y PUSH/PULL.
+- **PostgreSQL en Supabase** (driver `pgx`): Eventos, ocurrencias y reservas. El esquema y la función de reserva están en `internal/db/schema.sql`.
+- **Scripts de bash**: Arranque cada máquina.
 
 ---
 
-## 2. Cómo se propone la arquitectura base
+## 2. Propuesta de arquitectura base
 
-El sistema tiene tres capas y cada una corre en su propia máquina:
+El sistema cuenta con tres capas. Cada una corre en su propia máquina:
 
 | Máquina | Capa | Donde esta en el programa | Qué hace |
 |---|---|---|---|
@@ -28,7 +28,7 @@ El sistema tiene tres capas y cada una corre en su propia máquina:
 | **2** | Negocio | `manager` (Gestor de Transacciones, GT), `rmc` | El GT recibe las solicitudes, las valida y se las pasa a RMC. RMC consulta la disponibilidad y confirma la reserva. |
 | **3** | Almacenamiento | `persistence` | Es el único proceso que habla con la base de datos en supabase
 
-Cómo se conectan los procesos:
+Comunicación entre procesos:
 
 | Origen | Destino | Patron | Puerto|
 |---|---|---|---|
@@ -38,7 +38,7 @@ Cómo se conectan los procesos:
 | `rmc` (M2) | `persistence` (M3) | REQ / REP | 5560 en M3 |
 | `persistence` (M3) | Supabase | PostgreSQL | 5432 en Supabase |
 
-Recorrido de una reserva: el cliente envía la solicitud al GT, el GT la valida y se la pasa a RMC, RMC le pregunta a Persistencia cuántos asientos quedan y, si alcanzan, le pide guardarla. La respuesta regresa por el mismo camino.
+Flujo de una reserva: el cliente envía la solicitud al GT. GT la valida y la reenvía a RMC. RMC consulta a Persistencia cuántos asientos quedan y, si alcanzan, le solicita registrar la reserva. La respuesta regresa por el mismo camino.
 
 ### Estructura del proyecto
 
@@ -58,7 +58,7 @@ Recorrido de una reserva: el cliente envía la solicitud al GT, el GT la valida 
 
 ---
 
-## 3. Requisitos en todas las maquinas que lo probemos
+## 3. Requisitos
 
 - **Go 1.25 o superior**
 - **libzmq**, **pkg-config** y **gcc**: la librería de ZeroMQ para Go (pebbe/zmq4) se compila contra libzmq
@@ -70,7 +70,7 @@ Recorrido de una reserva: el cliente envía la solicitud al GT, el GT la valida 
 sudo apt update
 sudo apt install -y libzmq3-dev pkg-config build-essential git
 ```
-## 4. Descargar y compilar 
+## 4. Descarga y compilación
 
 ```bash
 git clone https://github.com/Ivan140809/SistemaBoletos.git
@@ -88,9 +88,7 @@ ls bin/
 ```
 ---
 
-## 5. Preparar la base de datos 
-
-### 5.1 Crear el archivo `.env`
+## 5. Configuración de la base de datos
 
 En M3, dentro de la carpeta del proyecto:
 
@@ -120,7 +118,7 @@ Si ese comando no existe, use `ip -4 addr` y busque la línea `inet` de la tarje
 
 Anote la IP de **M2** y la de **M3**. En este documento aparecen como `<IP_M2>` y `<IP_M3>`. M1 no necesita que nadie se conecte a ella.
 
-Si son máquinas virtuales (VirtualBox, VMware), configure la red en modo **Adaptador puente** o en una **Red NAT** compartida, para que las tres se vean entre sí. Compruébelo desde M1 y desde M2:
+Si son máquinas virtuales (VirtualBox, VMware, UTM), configure la red en modo **Adaptador puente** o en una **Red NAT** compartida, para que las tres se vean entre sí. Compruébelo desde M1 y desde M2:
 
 ```bash
 ping -c 3 <IP_M2>
@@ -158,7 +156,16 @@ El orden: primero M3, luego M2 y al final M1.
 ./scripts/machine3_storage.sh
 ```
 
-El script lee el `.env`, se conecta a la base, crea las tablas si faltan y carga los eventos iniciales de `data/test_case.json`. Debe verse así:
+El script carga el `.env`, se conecta a la base, crea las tablas faltantes y reinicia la base: borra los datos existentes y los reemplaza por los eventos de `data/test_case.json`.
+
+Para usar otro estado inicial, pasar las opciones a continuación del script
+
+```
+./scripts/machine3_storage.sh -generar                    # 50 eventos, 20 con dos fechas, 100 asientos cada una
+./scripts/machine3_storage.sh -inicial data/otro_caso.json  # caso de prueba propio, mismo formato que test_case.json
+```
+
+Salida esperada:
 
 ```
 persistencia 18:33:47.830434 base reiniciada con 2 eventos
