@@ -1,19 +1,19 @@
 #!/usr/bin/env bash
-# ESCENARIO DE DEMOSTRACIÓN BÁSICO (se ejecuta en la M1, el cliente).
-# Va paso a paso: cada "paso" muestra una descripción y espera ENTER, para que
-# se pueda explicar lo que ocurre en la sustentación.
-# Requisito: M3 y M2 ya arrancadas (con data/test_case.json).
-# Uso:   IP_NEGOCIO=<IP_de_M2> ./scripts/test_case.sh
-# (Ojo: este script usa IP_NEGOCIO, la IP de M2; machine2_business.sh usa IP_ALMACEN, la IP de M3.)
+# demo basica (se corre en la m1, el cliente).
+# va paso a paso: cada "paso" muestra una descripcion y espera enter, para poder
+# ir explicando lo que pasa en la sustentacion.
+# requisito: la m3 y la m2 ya arrancadas (con data/test_case.json).
+# uso:   IP_NEGOCIO=<ip_de_la_m2> ./scripts/test_case.sh
+# (ojo: este script usa IP_NEGOCIO, la ip de la m2; machine2_business.sh usa IP_ALMACEN, la ip de la m3.)
 set -euo pipefail
 cd "$(dirname "$0")/.."
 : "${IP_NEGOCIO:?falta IP_NEGOCIO, la ip de la maquina 2}"
-# Dirección del Gestor de Transacciones (puerto 5555 de la M2).
+# direccion del gt (puerto 5555 de la m2).
 GT="tcp://${IP_NEGOCIO}:5555"
-# Mes a consultar: se puede cambiar con la variable MES (por defecto 2026-11).
+# mes a consultar, se cambia con la variable MES (por defecto 2026-11).
 MES="${MES:-2026-11}"
 
-# Función auxiliar: imprime el texto del paso ($1) y pausa hasta que se presione ENTER.
+# ayudante: imprime el texto del paso ($1) y espera a que le des enter.
 paso() {
 	echo "$1"
 	read -rp "enter para seguir"

@@ -1,24 +1,24 @@
-// SERVICIO DE PERSISTENCIA - Máquina 3, capa de almacenamiento.
+// servicio de persistencia, maquina 3 (capa de almacenamiento).
 //
-// Es el ÚNICO proceso que habla con la base de datos (PostgreSQL en Supabase).
-// Escucha peticiones de RMC por un socket REP (puerto 5560), las traduce a
-// operaciones sobre la base usando el paquete internal/db y devuelve el resultado.
+// es el unico proceso que habla con la base de datos (postgresql en supabase).
+// escucha las peticiones de rmc por un socket rep (puerto 5560), las convierte en
+// operaciones sobre la base usando internal/db y devuelve el resultado.
 //
-//	RMC (M2) --(REQ/REP)--> [ persistencia ] --(SQL sobre internet)--> Supabase
+//	rmc (m2) --(req/rep)--> [ persistencia ] --(sql sobre internet)--> supabase
 //
-// Además de atender peticiones, este proceso sirve para OBSERVAR la base durante
-// la sustentación: imprime el estado inicial y vuelve a imprimir la tabla
-// después de cada reserva exitosa.
+// ademas de atender peticiones, sirve para ver la base durante la sustentacion:
+// imprime el estado inicial y vuelve a imprimir la tabla despues de cada reserva
+// exitosa.
 //
-// Modos de arranque (según las opciones):
-//   - Normal (sin -inicial ni -generar): conserva lo que haya en la base.
-//   - Con -inicial archivo.json o -generar: BORRA la base y la carga desde cero.
+// modos de arranque segun las opciones:
+//   - normal (sin -inicial ni -generar): deja lo que haya en la base.
+//   - con -inicial archivo.json o -generar: borra la base y la carga desde cero.
 //     (scripts/machine3_storage.sh agrega "-inicial data/test_case.json" por defecto)
-//   - Con -ver: solo imprime cómo está la base y termina, sin abrir el servicio.
+//   - con -ver: solo imprime como esta la base y termina, sin abrir el servicio.
 package main
 
 import (
-	"context" // contextos: ponerle límite de tiempo a las operaciones de la base
+	"context" // para ponerle limite de tiempo a las operaciones de la base
 	"encoding/json"
 	"flag"
 	"fmt"
@@ -33,11 +33,11 @@ import (
 )
 
 func main() {
-	// Opciones de línea de comandos (todas son punteros: se leen con *).
+	// opciones de la terminal (todas son punteros, se leen con *).
 	direccion := flag.String("bind", "tcp://*:5560", "endpoint REP donde escucha el servicio")
-	// os.Getenv("DATABASE_URL") lee la variable de entorno. OJO: Go NO lee el
-	// archivo .env por sí solo; por eso el script machine3_storage.sh hace
-	// "source .env" antes de arrancar este programa.
+	// os.getenv("database_url") lee la variable de entorno. ojo: go no lee el
+	// archivo .env solo, por eso machine3_storage.sh hace "source .env" antes de
+	// arrancar este programa.
 	dsn := flag.String("dsn", os.Getenv("DATABASE_URL"), "cadena de conexion a supabase, por defecto la de DATABASE_URL")
 	inicial := flag.String("inicial", "", "archivo json con el estado inicial")
 	generar := flag.Bool("generar", false, "genera eventos de prueba automaticamente")
@@ -57,20 +57,21 @@ func main() {
 	if *dsn == "" {
 		log.Fatal("no hay a donde conectarse, falta DATABASE_URL en el .env o el flag -dsn")
 	}
-	// Abre el pool de conexiones a Supabase y aplica schema.sql (crea tablas si faltan).
+	// abre el pool de conexiones a supabase y aplica schema.sql (crea las tablas
+	// que falten).
 	base, err := db.Conectar(*dsn)
 	if err != nil {
 		log.Fatal(err)
 	}
 	defer base.Cerrar()
 
-	// Modo -ver: imprime la base y sale. "return" dentro de main termina el programa.
-	// Fíjese que esto ocurre ANTES del reinicio: -ver nunca borra nada.
+	// modo -ver: imprime la base y sale. "return" dentro de main termina el
+	// programa. fijate que esto pasa antes del reinicio, asi que -ver nunca borra nada.
 	if *ver {
 		mostrarTabla(base, *limite)
 		return
 	}
-	// Si pidieron estado inicial (por archivo o generado), se reinicia la base.
+	// si pidieron estado inicial (por archivo o generado), se reinicia la base.
 	if *generar || *inicial != "" {
 		var iniciales []model.Evento
 		if *generar {
@@ -79,7 +80,7 @@ func main() {
 			iniciales, err = db.LeerEventos(*inicial)
 		}
 		if err == nil {
-			// Borra las tablas y carga los eventos (en una sola transacción).
+			// borra las tablas y carga los eventos, todo en una transaccion.
 			err = base.Reiniciar(context.Background(), iniciales)
 		}
 		if err != nil {
@@ -88,8 +89,8 @@ func main() {
 		log.Printf("base reiniciada con %d eventos", len(iniciales))
 	}
 
-	// Socket REP: el servidor del patrón request/reply. Hace Bind (se queda
-	// escuchando en el puerto 5560 de esta máquina) y RMC se conecta a él.
+	// socket rep: el servidor de request/reply. hace bind (se queda escuchando en
+	// el puerto 5560 de esta maquina) y rmc se conecta a el.
 	socket, err := zmq.NewSocket(zmq.REP)
 	if err != nil {
 		log.Fatal(err)
@@ -102,34 +103,34 @@ func main() {
 	fmt.Println("estado inicial de la base")
 	mostrarTabla(base, *limite)
 
-	// Ciclo principal: recibe una petición, la atiende, responde y, si hubo
-	// cambios en la base, imprime la tabla. Atiende de a una a la vez (un solo hilo),
-	// lo que además serializa los accesos a la base desde esta capa.
+	// ciclo principal: recibe una peticion, la atiende, responde y, si hubo
+	// cambios en la base, imprime la tabla. atiende de a una (un solo hilo), lo que
+	// de paso ordena los accesos a la base desde esta capa.
 	for {
 		mensaje, err := socket.RecvBytes(0)
 		if err != nil {
 			log.Printf("no se pudo recibir: %v", err)
 			continue
 		}
-		// Cada operación sobre la base tiene un tiempo máximo ("limite"); si se
-		// pasa, se cancela y se devuelve error.
+		// cada operacion sobre la base tiene un tiempo maximo ("limite"). si se
+		// pasa, se cancela y devuelve error.
 		ctx, cancelar := context.WithTimeout(context.Background(), *limite)
 		respuesta, cambio := atender(ctx, base, mensaje)
 		cancelar()
 		datos, _ := json.Marshal(respuesta)
-		// Siempre se responde (regla de los sockets REP).
+		// siempre se responde (regla de los sockets rep).
 		if _, err := socket.SendBytes(datos, 0); err != nil {
 			log.Printf("no se pudo responder: %v", err)
 		}
 		if *tabla && cambio {
-			mostrarTabla(base, *limite) // se imprime después de responder para no sumar tiempo a la respuesta
+			mostrarTabla(base, *limite) // se imprime despues de responder para no sumarle tiempo a la respuesta
 		}
 	}
 }
 
-// atender interpreta una petición de RMC, ejecuta la operación en la base y
-// devuelve (respuesta, huboCambio). "huboCambio" es true solo cuando se creó una
-// reserva con éxito; sirve para decidir si hay que reimprimir la tabla.
+// atender lee una peticion de rmc, hace la operacion en la base y devuelve
+// (respuesta, hubocambio). hubocambio es true solo cuando se creo una reserva con
+// exito, y sirve para decidir si hay que reimprimir la tabla.
 func atender(ctx context.Context, base *db.BaseDatos, mensaje []byte) (model.Respuesta, bool) {
 	var peticion model.PeticionDB
 	if err := json.Unmarshal(mensaje, &peticion); err != nil {
@@ -138,7 +139,7 @@ func atender(ctx context.Context, base *db.BaseDatos, mensaje []byte) (model.Res
 	s := peticion.Solicitud
 	var resp model.Respuesta
 	var err error
-	// Según la operación pedida por RMC se llama al método correspondiente de db.
+	// segun la operacion que pidio rmc se llama al metodo que toca de db.
 	switch peticion.Operacion {
 	case model.OpConsultarEventos:
 		var eventos []model.Evento
@@ -157,8 +158,8 @@ func atender(ctx context.Context, base *db.BaseDatos, mensaje []byte) (model.Res
 	default:
 		err = fmt.Errorf("no se reconoce la operacion %q", peticion.Operacion)
 	}
-	// Si alguna operación falló (error de la base, evento inexistente, etc.), se
-	// descarta lo que se había armado y se responde con el error (Exito=false).
+	// si algo fallo (error de la base, evento que no existe, etc.), se tira lo que
+	// se habia armado y se responde con el error (exito = false).
 	if err != nil {
 		resp = model.Respuesta{IdSolicitud: s.IdSolicitud, Mensaje: err.Error()}
 	}
@@ -167,8 +168,8 @@ func atender(ctx context.Context, base *db.BaseDatos, mensaje []byte) (model.Res
 	return resp, cambio
 }
 
-// mostrarTabla imprime en la terminal el estado completo de la base:
-// eventos con sus asientos libres/vendidos y la lista de reservas.
+// mostrartabla imprime en la terminal el estado completo de la base: los eventos
+// con sus asientos libres y vendidos, y la lista de reservas.
 func mostrarTabla(base *db.BaseDatos, limite time.Duration) {
 	ctx, cancelar := context.WithTimeout(context.Background(), limite)
 	defer cancelar()
@@ -180,7 +181,7 @@ func mostrarTabla(base *db.BaseDatos, limite time.Duration) {
 	fmt.Print(tabla)
 }
 
-// queHace traduce el nombre técnico de la operación a una frase corta para el log.
+// quehace pasa el nombre tecnico de la operacion a una frase corta para el log.
 func queHace(op model.OperacionDB) string {
 	switch op {
 	case model.OpConsultarEventos:

@@ -1,18 +1,18 @@
 #!/usr/bin/env bash
-# ESCENARIO DE DEMOSTRACIÓN CON CASOS BORDE (se ejecuta en la M1, el cliente).
-# Prueba cosas que deben FALLAR bien: fecha inexistente, evento inexistente,
-# solicitudes mal formadas (las frena el GT), evento agotado y competencia
-# concurrente por los últimos asientos.
-# Requisito: M3 arrancada con OTRO caso de prueba:
+# demo con casos borde (se corre en la m1, el cliente).
+# prueba cosas que tienen que fallar bien: fecha que no existe, evento que no
+# existe, solicitudes mal armadas (las frena el gt), evento agotado y pelea
+# concurrente por los ultimos asientos.
+# requisito: la m3 arrancada con OTRO caso de prueba:
 #   ./scripts/machine3_storage.sh -inicial data/custom_case.json
-# Uso:   IP_NEGOCIO=<IP_de_M2> ./scripts/custom_cases.sh
+# uso:   IP_NEGOCIO=<ip_de_la_m2> ./scripts/custom_cases.sh
 set -euo pipefail
 cd "$(dirname "$0")/.."
 : "${IP_NEGOCIO:?falta IP_NEGOCIO, la ip de la maquina 2}"
-# Dirección del Gestor de Transacciones (puerto 5555 de la M2).
+# direccion del gt (puerto 5555 de la m2).
 GT="tcp://${IP_NEGOCIO}:5555"
 
-# Función auxiliar: imprime el texto del paso ($1) y pausa hasta que se presione ENTER.
+# ayudante: imprime el texto del paso ($1) y espera a que le des enter.
 paso() {
 	echo "$1"
 	read -rp "enter para seguir"
