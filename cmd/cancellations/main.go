@@ -1,19 +1,6 @@
-// servicio de cancelaciones, maquina 2 (capa de negocio).
-//
-// por ahora es solo un esqueleto para la segunda entrega: se conecta al gt, se
-// queda escuchando y cuando llega algo solo imprime "llego una cancelacion".
-// no lee el mensaje, no toca la base ni avisa a ningun cliente. ademas el gt
-// todavia no le manda nada, porque validar() rechaza todo lo que no sea consulta
-// o reserva.
-//
-// como deberia quedar al final segun el enunciado:
-//
-//	cliente -> gt (responde "recibida" al toque) -> push/pull -> este servicio
-//	-> pide a persistencia liberar los asientos -> cuando persistencia confirma,
-//	avisa directo al cliente.
-//
-// push/pull es un pipeline asincrono: el que hace push deja el mensaje y sigue
-// con lo suyo sin esperar respuesta, y el que hace pull los va sacando.
+// servicio de cancelaciones de la maquina 2, por ahora es un esqueleto para la segunda entrega.
+// se conecta al push del gt con un pull, se queda escuchando y solo avisa cuando llega algo.
+// al final debe pedirle a persistencia liberar los asientos y avisarle al cliente sin que este espere.
 package main
 
 import (
@@ -23,31 +10,41 @@ import (
 	"os"
 )
 
+// main arranca el servicio y escucha cancelaciones para siempre
 func main() {
+	// direccion del push del gt
 	gt := flag.String("gt", "tcp://localhost:5557", "endpoint PUSH del Gestor de Transacciones")
+	// lee todas las opciones que se pasaron
 	flag.Parse()
+	// los mensajes salen por la terminal
 	log.SetOutput(os.Stdout)
+	// cada mensaje empieza con cancelaciones
 	log.SetPrefix("cancelaciones ")
+	// cada mensaje lleva la hora con microsegundos
 	log.SetFlags(log.Ltime | log.Lmicroseconds)
 
-	// pull es el lado que recibe en un pipeline. se conecta al push del gt (5557).
+	// aqui se crea el socket pull que recibe del gt
 	entrada, err := zmq.NewSocket(zmq.PULL)
 	if err != nil {
 		log.Fatal(err)
 	}
+	// cierra el socket al terminar
 	defer entrada.Close()
+	// se conecta al push del gt en el puerto 5557
 	if err := entrada.Connect(*gt); err != nil {
 		log.Fatalf("no se pudo conectar al gestor: %v", err)
 	}
+	// avisa que el servicio ya esta listo
 	log.Printf("listo, conectado al gestor en %s", *gt)
 
-	// ciclo infinito que recibe y solo avisa que llego algo.
-	// el "_" tira el contenido del mensaje porque todavia no lo usamos.
+	// ciclo infinito
 	for {
+		// espera un mensaje y por ahora descarta su contenido
 		if _, err := entrada.RecvBytes(0); err != nil {
 			log.Printf("no se pudo recibir: %v", err)
 			continue
 		}
+		// avisa que llego una cancelacion
 		log.Printf("llego una cancelacion")
 	}
 }

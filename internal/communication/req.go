@@ -1,103 +1,103 @@
-// paquete communication: un envoltorio chiquito sobre un socket req de zeromq
-// que le agrega dos cosas que el socket crudo no trae:
-//
-//  1. timeout: si el otro lado no contesta en x tiempo, se rinde con un error en
-//     vez de quedarse bloqueado para siempre.
-//  2. recuperacion: despues de un timeout el socket req queda inservible (la
-//     explicacion esta en pedir), asi que se destruye y se crea uno nuevo.
-//
-// lo usan dos procesos: el cliente (para hablar con el gt) y rmc (para hablar
-// con persistencia). esta en internal/ porque es codigo compartido, y en go lo
-// que esta dentro de una carpeta "internal" solo se puede importar desde este mismo proyecto.
+// paquete communication, un envoltorio sobre un socket req de zeromq que le agrega un
+// tiempo maximo de espera y la recuperacion del socket cuando el otro lado no contesta.
+// ESCALABILIDAD HORIZONTAL, si recibe varias direcciones separadas por coma se conecta a todas y reparte las peticiones.
+// lo usan el cliente para hablar con el gt y rmc para hablar con persistencia.
 package communication
 
 import (
 	"encoding/json"
 	"fmt"
 	zmq "github.com/pebbe/zmq4"
+	"strings"
 	"time"
 )
 
-// clientereq es un struct: un grupo de campos juntos (parecido a una clase sin
-// metodos adentro, los metodos se declaran afuera mas abajo).
-// los campos con minuscula son privados al paquete y los de mayuscula son
-// publicos. con las funciones pasa igual: pedir y nuevoclientereq (con mayuscula)
-// se pueden usar desde otros paquetes, conectar no.
+// ClienteReq guarda todo lo que necesita un cliente req
 type ClienteReq struct {
-	endpoint string        // a donde conectarse, ej. "tcp://192.168.1.10:5555"
-	timeout  time.Duration // cuanto esperar antes de rendirse
-	socket   *zmq.Socket   // el socket req de verdad
+	endpoint string // direccion a donde se conecta
+	timeout time.Duration // cuanto espera antes de rendirse
+	socket *zmq.Socket // el socket req de verdad
 }
 
-// nuevoclientereq es un "constructor" (en go no existen, es solo una convencion:
-// una funcion que arma y devuelve el struct). devuelve (*clientereq, error):
-// el puntero al objeto creado, o el error si no pudo conectar.
+// NuevoClienteReq arma el cliente y lo deja conectado
 func NuevoClienteReq(endpoint string, timeout time.Duration) (*ClienteReq, error) {
-	// "&clientereq{...}" crea el struct y devuelve su direccion (un puntero).
+	// aqui se crea el cliente con su direccion y su tiempo maximo
 	c := &ClienteReq{endpoint: endpoint, timeout: timeout}
+	// lo conecta y si falla devuelve el error
 	if err := c.conectar(); err != nil {
-		return nil, err // nil aqui es "nada" (el puntero vacio)
+		return nil, err
 	}
-	return c, nil // nil en el error es "no hubo error"
+	// devuelve el cliente listo sin error
+	return c, nil
 }
 
-// conectar crea el socket req y lo conecta. esta separada de nuevoclientereq para
-// poder llamarla otra vez cuando toca recrear el socket despues de un timeout.
-// "(c *clientereq)" antes del nombre quiere decir que es un metodo de
-// clientereq (c viene siendo el "this" o "self").
+// conectar crea el socket req y lo conecta, se vuelve a usar despues de un timeout
 func (c *ClienteReq) conectar() error {
+	// aqui se crea el socket req
 	socket, err := zmq.NewSocket(zmq.REQ)
 	if err != nil {
 		return err
 	}
-	// linger es cuanto tiempo se queda el socket tratando de mandar lo pendiente
-	// al cerrarse. 0 es descartar de una, sin esperar.
-	socket.SetLinger(0) // asi no se queda esperando a que salga el mensaje
-	// rcvtimeo y sndtimeo son el maximo que bloquea un recv o un send. pasado ese
-	// tiempo la llamada devuelve error en vez de colgarse.
-	socket.SetRcvtimeo(c.timeout) // asi no se queda esperando una respuesta que no llega
-	socket.SetSndtimeo(c.timeout) // y tampoco se queda pegado al enviar
-	if err := socket.Connect(c.endpoint); err != nil {
-		socket.Close()
-		// %w mete el error original dentro de uno nuevo con mas contexto.
-		return fmt.Errorf("no se pudo conectar con %s: %w", c.endpoint, err)
+	// al cerrar descarta lo pendiente sin esperar
+	socket.SetLinger(0)
+	// tiempo maximo esperando una respuesta
+	socket.SetRcvtimeo(c.timeout)
+	// tiempo maximo intentando enviar
+	socket.SetSndtimeo(c.timeout)
+	// solo manda mensajes a destinos ya conectados para no perderlos en uno caido
+	socket.SetImmediate(true)
+	// ESCALABILIDAD HORIZONTAL, recorre cada direccion separada por coma
+	for _, ep := range strings.Split(c.endpoint, ",") {
+		// quita los espacios de la direccion
+		ep = strings.TrimSpace(ep)
+		// si quedo vacia se salta
+		if ep == "" {
+			continue
+		}
+		// ESCALABILIDAD HORIZONTAL, se conecta a esta direccion y el req reparte por turnos entre todas
+		if err := socket.Connect(ep); err != nil {
+			// si no conecta cierra el socket y avisa
+			socket.Close()
+			return fmt.Errorf("no se pudo conectar con %s: %w", ep, err)
+		}
 	}
+	// guarda el socket en el cliente
 	c.socket = socket
 	return nil
 }
 
-// pedir manda "peticion" (cualquier struct, se pasa a json) y espera la
-// respuesta, que se escribe en "respuesta" (hay que pasar un puntero a un struct
-// vacio). "any" es "cualquier tipo" (alias de interface{}).
+// Pedir manda una peticion en json y espera la respuesta
 func (c *ClienteReq) Pedir(peticion, respuesta any) error {
+	// convierte la peticion a json
 	datos, err := json.Marshal(peticion)
 	if err != nil {
 		return err
 	}
+	// envia la peticion
 	if _, err := c.socket.SendBytes(datos, 0); err != nil {
 		return fmt.Errorf("no se pudo enviar a %s: %w", c.endpoint, err)
 	}
-	// se bloquea hasta que llegue la respuesta o venza el timeout.
+	// espera la respuesta hasta que llegue o se acabe el tiempo
 	recibido, err := c.socket.RecvBytes(0)
 
+	// si no llego respuesta el socket queda trabado
 	if err != nil {
-		// importante: un socket req es una maquina de estados bien rigida. despues
-		// de enviar queda esperando la respuesta y no deja enviar otra peticion
-		// hasta recibirla. si la respuesta nunca llego (timeout), el socket se queda
-		// trabado ahi. la solucion de siempre (patron "lazy pirate" de la guia de
-		// zeromq) es cerrarlo y crear uno nuevo.
-		c.socket.Close() // recreacion del req
+		// se cierra el socket trabado, patron lazy pirate de zeromq
+		c.socket.Close()
+		// aqui se crea un socket nuevo para reemplazar el trabado
 		if errConexion := c.conectar(); errConexion != nil {
 			return errConexion
 		}
+		// avisa que el otro lado no contesto a tiempo
 		return fmt.Errorf("%s no contesto en %v", c.endpoint, c.timeout)
 	}
-	// pasa el json recibido al struct de respuesta.
+	// pasa el json recibido a la respuesta
 	return json.Unmarshal(recibido, respuesta)
 }
 
-// cerrar libera el socket. se llama con "defer" al final de quien lo creo.
+// Cerrar libera el socket al terminar
 func (c *ClienteReq) Cerrar() {
+	// solo lo cierra si existe
 	if c.socket != nil {
 		c.socket.Close()
 	}

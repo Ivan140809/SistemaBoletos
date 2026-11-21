@@ -1,0 +1,9 @@
+# archivos que no se copian a la imagen de docker
+# historial de git
+.git
+# binarios compilados en la maquina local
+bin
+# credenciales, nunca van dentro de la imagen
+.env
+# resultados de metricas
+metrics

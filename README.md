@@ -111,10 +111,16 @@ DATABASE_URL='postgresql://postgres.abcdefghijk:SuPassword123@aws-0-us-east-1.po
 En cada máquina:
 
 ```bash
-hostname -I
+ip -br -4 addr
 ```
 
-Si ese comando no existe, use `ip -4 addr` y busque la línea `inet` de la tarjeta de red (no la de `lo`).
+La IP de la máquina es la de la tarjeta que aparece como `UP` y no es `lo` (por ejemplo `wlan0`, `eth0` o `enp0s3`). Las tarjetas `docker0`, `virbr0` y `br-...` son redes virtuales y no sirven. Se anota solo la IP, sin lo que va después de la `/`:
+
+```
+lo               UNKNOWN        127.0.0.1/8
+wlan0            UP             10.150.103.170/22      (esta, la IP es 10.150.103.170)
+docker0          DOWN           172.17.0.1/16
+```
 
 Anote la IP de **M2** y la de **M3**. En este documento aparecen como `<IP_M2>` y `<IP_M3>`. M1 no necesita que nadie se conecte a ella.
 

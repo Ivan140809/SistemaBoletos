@@ -1,18 +1,37 @@
 #!/usr/bin/env bash
-# maquina 2 (negocio): arranca el gt, rmc y cancelaciones juntos en la misma terminal.
-# uso:   IP_ALMACEN=<ip_de_la_m3> ./scripts/machine2_business.sh
-# (IP_ALMACEN es la ip de la maquina 3, donde corre persistencia)
+# maquina 2 de negocio, arranca el gt, las instancias de rmc y cancelaciones en la misma terminal.
+# IP_ALMACEN es la ip de la maquina donde corre persistencia, pueden ser varias separadas por coma.
+# arquitectura escalable con 3 rmc y 2 persistencias IP_ALMACEN=ip_m3,ip_m4 RMCS=3 ./scripts/machine2_business.sh
+
+# se detiene ante cualquier error o variable sin definir
 set -euo pipefail
+# se para en la raiz del proyecto
 cd "$(dirname "$0")/.."
-# si IP_ALMACEN no esta definida, se sale con ese mensaje de error (sintaxis ${VAR:?mensaje}).
-: "${IP_ALMACEN:?falta IP_ALMACEN, la ip de la maquina 3}"
-# al salir del script (ctrl+c incluido) mata los procesos que dejo en segundo plano.
+# si falta IP_ALMACEN se sale con este mensaje
+: "${IP_ALMACEN:?falta IP_ALMACEN, la ip de la maquina 3 (o varias separadas por coma)}"
+# ESCALABILIDAD HORIZONTAL, cuantas instancias de rmc lanzar, por defecto 3
+RMCS="${RMCS:-3}"
+# ESCALABILIDAD HORIZONTAL, parte IP_ALMACEN por comas y guarda cada ip en una lista
+IFS=, read -ra IPS <<< "$IP_ALMACEN"
+# aqui se crea la lista de direcciones de persistencia, empieza vacia
+PERSISTENCIA=""
+# recorre cada ip
+for ip in "${IPS[@]}"; do
+	# le agrega tcp y el puerto 5560 y la suma a la lista separada por coma
+	PERSISTENCIA="${PERSISTENCIA:+$PERSISTENCIA,}tcp://${ip}:5560"
+done
+# al salir, incluso con ctrl+c, mata los procesos que quedaron en segundo plano
 trap 'kill $(jobs -p) 2>/dev/null' EXIT
-# el "&" al final de la linea lanza el programa en segundo plano.
+# arranca el gt en segundo plano
 ./bin/manager &
-# pausa corta para que el gt alcance a abrir sus puertos antes de que los demas se conecten.
+# espera un momento para que el gt abra sus puertos
 sleep 0.5
-./bin/rmc -gt tcp://localhost:5556 -persistencia "tcp://${IP_ALMACEN}:5560" &
+# ESCALABILIDAD HORIZONTAL, lanza varios rmc conectados al mismo gt que les reparte por turnos
+for i in $(seq 1 "$RMCS"); do
+	# cada rmc tiene su nombre y reparte sus peticiones entre todas las persistencias
+	./bin/rmc -id "RMC-$i" -gt tcp://localhost:5556 -persistencia "$PERSISTENCIA" &
+done
+# arranca cancelaciones en segundo plano
 ./bin/cancellations -gt tcp://localhost:5557 &
-# espera a que terminen los procesos en segundo plano (o sea, se queda corriendo).
+# se queda corriendo hasta que terminen los procesos
 wait

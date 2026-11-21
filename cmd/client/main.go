@@ -1,19 +1,7 @@
-// cliente, maquina 1 (capa de consumidores).
-//
-// programa de linea de comandos que simula usuarios. tiene tres subcomandos:
-//
-//	client consultar     -> pide al gt los eventos de un mes
-//	client reservar      -> pide al gt reservar asientos de un evento
-//	client concurrente   -> lanza varios clientes a la vez peleando por el mismo evento
-//
-// el cliente es quien abre la conexion hacia el gt (connect, al puerto 5555 de
-// la m2) y la respuesta vuelve por esa misma conexion. por eso la m1 no necesita
-// puertos abiertos ni que nadie se conecte a ella (por ahora: las notificaciones
-// de cancelacion de la segunda entrega si van a obligar a pensar como contactar
-// al cliente).
-//
-// cada ejecucion manda una sola solicitud (o varias en paralelo en "concurrente")
-// y termina. todavia no es un generador de carga continua.
+// cliente de la maquina 1, programa de terminal que simula usuarios con tres subcomandos.
+// consultar pide los eventos de un mes, reservar pide asientos y concurrente lanza varios clientes
+// a la vez peleando por el mismo evento. el cliente hace connect al gt y la respuesta vuelve
+// por esa misma conexion, asi que la m1 no necesita puertos abiertos.
 package main
 
 import (
@@ -23,37 +11,39 @@ import (
 	"sistemaboletos/internal/communication"
 	"sistemaboletos/internal/model"
 	"sort"
-	"strconv" // pasar texto a numero (atoi)
+	"strconv"
 	"strings"
-	"sync" // para coordinar goroutines (waitgroup)
+	"sync"
 	"time"
 )
 
-// opcionescomunes junta las opciones que comparten los tres subcomandos.
-// son punteros porque flag devuelve punteros (se llenan al hacer parse).
+// opcionesComunes junta las opciones que comparten los tres subcomandos
 type opcionesComunes struct {
 	gt      *string        // direccion del gestor de transacciones
 	id      *string        // nombre del cliente
 	timeout *time.Duration // cuanto esperar la respuesta
 }
 
-// resultadoconcurrente guarda lo que le paso a cada cliente del subcomando concurrente.
+// resultadoConcurrente guarda lo que le paso a cada cliente del subcomando concurrente
 type resultadoConcurrente struct {
-	cliente  string
-	pedidos  int // cuantos asientos pidio
-	resp     model.Respuesta
-	err      error // error de comunicacion, si hubo (timeout, etc.)
-	duracion time.Duration
+	cliente  string          // nombre del cliente
+	pedidos  int             // cuantos asientos pidio
+	resp     model.Respuesta // lo que contesto el sistema
+	err      error           // error de comunicacion si hubo
+	duracion time.Duration   // cuanto tardo la respuesta
 }
 
+// main lee el subcomando y llama a la funcion que toca
 func main() {
-	// os.args es la lista de palabras escritas en la terminal:
-	// os.args[0] es el nombre del programa, os.args[1] el subcomando y el resto las opciones.
+	// sin subcomando muestra la ayuda
 	if len(os.Args) < 2 {
 		uso()
 	}
+	// el subcomando y el resto de opciones
 	comando, argumentos := os.Args[1], os.Args[2:]
+	// error si algo sale mal
 	var err error
+	// segun el subcomando llama a su funcion
 	switch comando {
 	case "consultar":
 		err = consultar(argumentos)
@@ -64,13 +54,14 @@ func main() {
 	default:
 		uso()
 	}
+	// si hubo error lo muestra y sale con codigo 1
 	if err != nil {
 		fmt.Fprintln(os.Stderr, "error:", err)
-		os.Exit(1) // codigo de salida 1 = termino con error
+		os.Exit(1)
 	}
 }
 
-// uso imprime la ayuda y termina el programa (codigo 2 = mal uso).
+// uso imprime la ayuda y sale con codigo 2 de mal uso
 func uso() {
 	fmt.Fprintln(os.Stderr, `uso: client <comando> [opciones]
 
@@ -81,15 +72,9 @@ comandos:
 	os.Exit(2)
 }
 
-// opciones define las tres opciones comunes sobre el conjunto de opciones "fs"
-// de un subcomando:
-//
-//	-gt       donde esta el gt, con formato tcp://ip:puerto (ej. tcp://192.168.1.20:5555).
-//	          si no se escribe, usa la variable de entorno srb_gt, y si tampoco existe,
-//	          tcp://localhost:5555. prioridad: opcion > variable > valor por defecto.
-//	-id       nombre de este cliente (queda guardado en la reserva y en los logs).
-//	-timeout  cuanto esperar la respuesta antes de rendirse (ej. 5s, 500ms).
+// opciones define -gt -id y -timeout, -gt usa SRB_GT si no se escribe y si no localhost
 func opciones(fs *flag.FlagSet, idPorDefecto string) opcionesComunes {
+	// aqui se crean las opciones comunes
 	return opcionesComunes{
 		gt:      fs.String("gt", entorno("SRB_GT", "tcp://localhost:5555"), "endpoint del Gestor de Transacciones"),
 		id:      fs.String("id", idPorDefecto, "identificador del cliente"),
@@ -97,191 +82,208 @@ func opciones(fs *flag.FlagSet, idPorDefecto string) opcionesComunes {
 	}
 }
 
-// entorno lee una variable de entorno y si no existe o esta vacia usa el valor por defecto.
+// entorno lee una variable de entorno y si esta vacia usa el valor por defecto
 func entorno(variable, valorPorDefecto string) string {
+	// si la variable tiene valor se usa
 	if valor := os.Getenv(variable); valor != "" {
 		return valor
 	}
+	// si no se usa el valor por defecto
 	return valorPorDefecto
 }
 
-// enviar manda una solicitud al gt y devuelve la respuesta, cuanto tardo y un error.
-// en go una funcion puede devolver varios valores a la vez.
+// enviar manda una solicitud al gt y devuelve la respuesta, cuanto tardo y un error
 func enviar(op opcionesComunes, s model.Solicitud) (model.Respuesta, time.Duration, error) {
+	// aqui llega la respuesta
 	var resp model.Respuesta
-	// cada envio crea su propio socket req conectado al gt (op.gt es un puntero, de ahi el *).
+	// aqui se crea el socket req propio de este envio
 	cliente, err := communication.NuevoClienteReq(*op.gt, *op.timeout)
 	if err != nil {
 		return resp, 0, err
 	}
+	// cierra el socket al terminar
 	defer cliente.Cerrar()
-	// el tiempo de respuesta (ida y vuelta completa) es la diferencia entre antes
-	// y despues de pedir. de aqui salen las metricas de rendimiento.
+	// marca la hora de inicio para medir el tiempo de respuesta
 	inicio := time.Now()
+	// manda la solicitud y espera la respuesta
 	err = cliente.Pedir(s, &resp)
+	// devuelve la respuesta y cuanto tardo
 	return resp, time.Since(inicio), err
 }
 
-// consultar es el subcomando "client consultar", pide los eventos de un mes.
+// consultar es el subcomando que pide los eventos de un mes
 func consultar(argumentos []string) error {
-	// cada subcomando tiene su propio conjunto de opciones (flagset).
-	// exitonerror: si las opciones estan mal escritas, imprime la ayuda y termina.
+	// aqui se crean las opciones de este subcomando
 	fs := flag.NewFlagSet("consultar", flag.ExitOnError)
+	// opciones comunes
 	op := opciones(fs, "Cliente1")
+	// mes a consultar
 	mes := fs.String("mes", "2026-11", "mes a consultar, por ejemplo 2026-11")
+	// lee las opciones
 	fs.Parse(argumentos)
 
-	// se arma la solicitud. nuevoid genera un id unico tipo "cliente1-a1b2c3...".
+	// aqui se crea la solicitud de consulta con un id unico
 	s := model.Solicitud{IdSolicitud: model.NuevoID(*op.id), IdCliente: *op.id, Tipo: model.TipoConsulta, Mes: *mes}
+	// la manda al gt
 	resp, duracion, err := enviar(op, s)
 	if err != nil {
 		return err
 	}
-	// "lo atendio rmc-1": la respuesta trae el nombre de la instancia que la atendio.
+	// ESCALABILIDAD HORIZONTAL, muestra cual instancia de rmc atendio la solicitud
 	atendio := ""
 	if resp.Instancia != "" {
 		atendio = ", lo atendio " + resp.Instancia
 	}
+	// imprime el resultado y el tiempo
 	fmt.Printf("%s consulto los eventos de %s, %s: %s (%v%s)\n", *op.id, *mes, model.Resultado(resp.Exito), resp.Mensaje, duracion.Round(time.Microsecond), atendio)
+	// si salio bien imprime la tabla de eventos
 	if resp.Exito {
 		fmt.Print(model.TablaEventos(resp.Eventos))
 	}
 	return nil
 }
 
-// reservar es el subcomando "client reservar", pide n asientos de una fecha de un evento.
-// las reservas son por cantidad de asientos, no se elige el numero de silla.
+// reservar es el subcomando que pide n asientos de una fecha de un evento
 func reservar(argumentos []string) error {
+	// aqui se crean las opciones de este subcomando
 	fs := flag.NewFlagSet("reservar", flag.ExitOnError)
+	// opciones comunes
 	op := opciones(fs, "Cliente1")
+	// evento a reservar
 	evento := fs.String("evento", "E1", "identificador del evento")
+	// fecha del evento
 	ocurrencia := fs.Int("ocurrencia", 1, "cual fecha del evento, 1 o 2")
+	// cuantos asientos
 	asientos := fs.Int("asientos", 1, "cantidad de asientos")
+	// lee las opciones
 	fs.Parse(argumentos)
 
+	// aqui se crea la solicitud de reserva con un id unico
 	s := model.Solicitud{IdSolicitud: model.NuevoID(*op.id), IdCliente: *op.id, Tipo: model.TipoReserva, IdEvento: *evento, IdOcurrencia: *ocurrencia, CantidadAsientos: *asientos}
+	// la manda al gt
 	resp, duracion, err := enviar(op, s)
 	if err != nil {
 		return err
 	}
+	// imprime el resultado y el tiempo
 	fmt.Printf("%s pidio %s de %s en la fecha %d, %s: %s (%v)\n", *op.id, model.Asientos(*asientos), *evento, *ocurrencia, model.Resultado(resp.Exito), resp.Mensaje, duracion.Round(time.Microsecond))
 	return nil
 }
 
-// concurrente es el subcomando "client concurrente": simula varios clientes que
-// piden reservar el mismo evento exactamente al mismo tiempo.
-//
-// sirve para demostrar que el sistema no vende mas asientos de los que hay,
-// aunque muchos clientes compitan. con -asientos 30,25,40,20,15 se lanzan 5
-// clientes que piden 30, 25, 40, 20 y 15 asientos de un evento de 100. en total
-// piden 130, asi que a alguno le tiene que tocar quedarse sin puesto.
-//
-// ojo: esto no es el generador de carga del enunciado (20 solicitudes por minuto,
-// parametrizable, durante 2-3 minutos, con consultas y reservas mezcladas). es
-// solo una demo de competencia por asientos: cada cliente hace una sola
-// solicitud y siempre de reserva.
-//
-// como funciona (la tecnica de la "pistola de salida"):
-//  1. se crea una goroutine por cliente. una goroutine es un hilo ligero de go
-//     (se lanza con "go") y todas corren a la vez.
-//  2. cada una abre su propio socket req (un socket zeromq no se puede compartir
-//     entre hilos y un req solo aguanta una peticion a la vez).
-//  3. cada una avisa "ya me conecte" y se queda esperando en el canal "salida".
-//  4. el hilo principal espera a que todos esten conectados, aguanta 300 ms para
-//     que las conexiones tcp terminen de armarse y cierra el canal (close(salida)),
-//     lo que despierta a todas las goroutines al mismo instante.
-//  5. cada una manda su reserva y mide su tiempo. el hilo principal espera a que
-//     terminen todas, ordena los resultados por duracion (mas o menos el orden en
-//     que los atendieron) y muestra quien consiguio asientos y cuantos se vendieron.
+// concurrente lanza varios clientes que reservan el mismo evento en el mismo instante.
+// demuestra que no se venden mas asientos de los que hay aunque todos compitan a la vez
 func concurrente(argumentos []string) error {
+	// aqui se crean las opciones de este subcomando
 	fs := flag.NewFlagSet("concurrente", flag.ExitOnError)
+	// opciones comunes
 	op := opciones(fs, "Concurrente")
+	// evento por el que compiten
 	evento := fs.String("evento", "E2", "evento por el que compiten los clientes")
+	// fecha del evento
 	ocurrencia := fs.Int("ocurrencia", 1, "cual fecha del evento")
+	// asientos que pide cada cliente separados por coma
 	lista := fs.String("asientos", "30,25,40,20,15", "asientos que pide cada cliente, separados por coma")
+	// lee las opciones
 	fs.Parse(argumentos)
 
-	// pasa el texto "30,25,40" a la lista de numeros [30, 25, 40].
-	// strings.split parte el texto por las comas y atoi ("ascii to integer")
-	// convierte cada pedazo.
+	// lista de cantidades y total pedido
 	var cantidades []int
 	total := 0
+	// parte el texto por comas
 	for _, valor := range strings.Split(*lista, ",") {
+		// convierte cada pedazo a numero
 		cantidad, err := strconv.Atoi(strings.TrimSpace(valor))
+		// debe ser un numero de al menos 1
 		if err != nil || cantidad < 1 {
 			return fmt.Errorf("la cantidad %q no sirve", valor)
 		}
+		// la agrega a la lista y al total
 		cantidades = append(cantidades, cantidad)
 		total += cantidad
 	}
 
-	// lista donde cada goroutine escribe su resultado en su propia posicion (asi
-	// no se pisan entre ellas).
+	// aqui se crea la lista de resultados, cada cliente escribe en su posicion
 	resultados := make([]resultadoConcurrente, len(cantidades))
-	// un canal (chan) es un tubo para comunicar goroutines. este es de tipo
-	// struct{}, o sea que no lleva datos, solo se usa de senal de "ya".
+	// aqui se crea el canal salida que suelta a todos los clientes a la vez
 	salida := make(chan struct{})
-	// waitgroup es un contador para esperar a un grupo de goroutines:
-	// add(1) suma una, done() resta una y wait() bloquea hasta que llegue a cero.
-	// "conectados" espera a que todas abran su socket y "terminados" a que acaben.
+	// contadores para esperar a que todos se conecten y a que todos terminen
 	var conectados, terminados sync.WaitGroup
+	// lanza un cliente por cada cantidad
 	for i, cantidad := range cantidades {
+		// uno mas por conectar y por terminar
 		conectados.Add(1)
 		terminados.Add(1)
-		// "go func(...) {...}(i, cantidad)" lanza la funcion anonima en una
-		// goroutine, pasandole los valores actuales de i y cantidad.
+		// aqui se crea la goroutine de un cliente
 		go func(i, cantidad int) {
+			// al terminar avisa que ya acabo
 			defer terminados.Done()
+			// aqui se crea el resultado de este cliente
 			r := resultadoConcurrente{cliente: fmt.Sprintf("%s-%d", *op.id, i+1), pedidos: cantidad}
-			cliente, err := communication.NuevoClienteReq(*op.gt, *op.timeout) // cada cliente tiene su propio socket req
+			// aqui se crea el socket req propio de este cliente
+			cliente, err := communication.NuevoClienteReq(*op.gt, *op.timeout)
+			// avisa que ya se conecto
 			conectados.Done()
+			// si no se pudo conectar guarda el error y termina
 			if err != nil {
 				r.err = err
 				resultados[i] = r
 				return
 			}
+			// cierra el socket al terminar
 			defer cliente.Cerrar()
-			// "<-salida" se queda esperando hasta que cierren el canal (la senal de salida).
+			// espera la senal de salida
 			<-salida
+			// aqui se crea la solicitud de reserva
 			s := model.Solicitud{IdSolicitud: model.NuevoID(r.cliente), IdCliente: r.cliente, Tipo: model.TipoReserva, IdEvento: *evento, IdOcurrencia: *ocurrencia, CantidadAsientos: cantidad}
+			// mide cuanto tarda la reserva
 			inicio := time.Now()
 			r.err = cliente.Pedir(s, &r.resp)
 			r.duracion = time.Since(inicio)
+			// guarda el resultado
 			resultados[i] = r
 		}(i, cantidad)
 	}
-	conectados.Wait() // espera a que todos hayan abierto su socket
-	// zeromq conecta en segundo plano, este margen asegura que las conexiones tcp
-	// ya existan cuando suene la pistola de salida.
+	// espera a que todos abran su socket
+	conectados.Wait()
+	// margen para que las conexiones tcp terminen de armarse
 	time.Sleep(300 * time.Millisecond)
+	// avisa cuantos salen y cuanto piden
 	fmt.Printf("salen %d clientes al mismo tiempo por %s en la fecha %d, entre todos piden %d asientos\n", len(cantidades), *evento, *ocurrencia, total)
-	close(salida) // pistola de salida: suelta a todas las goroutines a la vez
+	// cierra el canal y suelta a todos los clientes al mismo tiempo
+	close(salida)
+	// espera a que todos terminen
 	terminados.Wait()
 
-	// ordena los resultados del que tardo menos al que tardo mas. como el gt
-	// atiende por orden de llegada, esto se acerca al orden en que los atendieron.
-	// (la funcion entre llaves compara dos elementos a y b.)
-	sort.Slice(resultados, func(a, b int) bool { return resultados[a].duracion < resultados[b].duracion }) // orden aproximado de atencion
+	// ordena del que tardo menos al que tardo mas, parecido al orden de atencion
+	sort.Slice(resultados, func(a, b int) bool { return resultados[a].duracion < resultados[b].duracion })
+	// asientos vendidos y clientes que consiguieron puesto
 	concedidos, aceptados := 0, 0
+	// recorre cada resultado
 	for _, r := range resultados {
+		// si hubo error de comunicacion lo muestra y sigue
 		if r.err != nil {
 			fmt.Printf("%s pidio %s, %s: %v\n", r.cliente, model.Asientos(r.pedidos), model.Resultado(false), r.err)
 			continue
 		}
+		// si consiguio puesto suma sus asientos
 		if r.resp.Exito {
 			concedidos += r.pedidos
 			aceptados++
 		}
+		// imprime lo que le paso a este cliente
 		fmt.Printf("%s pidio %s, %s: %s (%v)\n", r.cliente, model.Asientos(r.pedidos), model.Resultado(r.resp.Exito), r.resp.Mensaje, r.duracion.Round(time.Microsecond))
 	}
+	// imprime el resumen final
 	fmt.Printf("%s, %s y se vendieron %d de los %d asientos pedidos\n", cuantos(aceptados, "cliente consiguio puesto", "clientes consiguieron puesto"), cuantos(len(resultados)-aceptados, "se quedo sin puesto", "se quedaron sin puesto"), concedidos, total)
 	return nil
 }
 
-// cuantos arma frases en singular o plural: "1 cliente consiguio puesto" / "3 clientes consiguieron puesto".
+// cuantos arma la frase en singular o plural segun n
 func cuantos(n int, uno, varios string) string {
+	// singular si es uno
 	if n == 1 {
 		return "1 " + uno
 	}
+	// plural en los demas casos
 	return fmt.Sprintf("%d %s", n, varios)
 }

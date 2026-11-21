@@ -1,29 +1,28 @@
 #!/usr/bin/env bash
-# maquina 3 (almacenamiento): arranca el servicio de persistencia.
-# uso:   ./scripts/machine3_storage.sh                         (carga data/test_case.json)
-#        ./scripts/machine3_storage.sh -generar                (50 eventos, 20 con dos fechas, 100 asientos)
-#        ./scripts/machine3_storage.sh -inicial data/otro.json (un caso de prueba propio)
-# todo lo que escribas despues del nombre del script se le pasa a ./bin/persistence.
+# maquina 3 de almacenamiento, arranca persistencia y todo lo que se escriba despues del script se le pasa.
+# sin argumentos carga data/test_case.json, con -generar inventa 50 eventos y con -inicial usa otro json.
+# arquitectura escalable ./scripts/machine3_storage.sh -inicial data/test_case.json -workers 8
+# ESCALABILIDAD VERTICAL, -workers dice cuantas peticiones atiende en paralelo esta instancia.
+# ESCALABILIDAD HORIZONTAL, para mas instancias en otras maquinas usar scripts/persistence_extra.sh
+# que no reinicia la base, esta de la m3 es la unica que debe reiniciarla.
 
-# set -e: parar si algun comando falla. set -u: error si se usa una variable sin definir.
-# set -o pipefail: un fallo dentro de una tuberia (|) tambien cuenta como fallo.
+# se detiene ante cualquier error, variable sin definir o fallo en una tuberia
 set -euo pipefail
-# ir a la carpeta raiz del proyecto, sin importar desde donde se corra el script.
+# se para en la raiz del proyecto
 cd "$(dirname "$0")/.."
-# si existe el .env, carga sus variables (DATABASE_URL) al entorno.
-# "set -a" hace que todo lo que se defina quede exportado y "source" ejecuta el archivo.
-# go no lee el .env solo, por eso hace falta este paso.
+# si existe el .env carga sus variables porque go no lo lee solo
 if [ -f .env ]; then
+	# todo lo que se defina queda exportado
 	set -a
-	source .env  
+	# carga DATABASE_URL y las demas variables
+	source .env
+	# deja de exportar automaticamente
 	set +a
 fi
-# $# es la cantidad de argumentos recibidos. si no se paso ninguno, se usa por defecto
-# "-inicial data/test_case.json". por eso, al correr el script sin argumentos, la
-# base se borra y se vuelve a cargar desde ese archivo.
-# (si se pasa CUALQUIER argumento, ese valor por defecto ya no aplica.)
+# si no se paso ningun argumento usa el caso de prueba y reinicia la base
 if [ $# -eq 0 ]; then
+	# pone -inicial data/test_case.json como argumentos
 	set -- -inicial data/test_case.json
 fi
-# "$@" son todos los argumentos tal cual. arranca persistencia escuchando en el puerto 5560.
+# arranca persistencia en el puerto 5560 con los argumentos que se pasaron
 ./bin/persistence -bind "tcp://*:5560" "$@"
