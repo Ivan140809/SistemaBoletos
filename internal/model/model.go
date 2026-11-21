@@ -16,10 +16,12 @@ import (
 // TipoSolicitud es lo que pide el cliente
 type TipoSolicitud string
 
-// los dos tipos de solicitud que existen hoy
+// los cuatro tipos de solicitud del enunciado
 const (
 	TipoConsulta TipoSolicitud = "consulta" // consultar eventos de un mes
-	TipoReserva  TipoSolicitud = "reserva"  // reservar asientos
+	TipoReserva TipoSolicitud = "reserva" // reservar asientos
+	TipoModificacion TipoSolicitud = "modificacion" // cambiar los asientos o la fecha de una reserva
+	TipoCancelacion TipoSolicitud = "cancelacion" // cancelar una reserva, asincronamente
 )
 
 // OperacionDB es lo que rmc le pide a persistencia, una reserva se vuelve dos operaciones
@@ -27,72 +29,80 @@ type OperacionDB string
 
 // operaciones que rmc le puede pedir a persistencia
 const (
-	OpConsultarEventos        OperacionDB = "consultar_eventos"        // eventos de un mes
+	OpConsultarEventos OperacionDB = "consultar_eventos" // eventos de un mes
 	OpConsultarDisponibilidad OperacionDB = "consultar_disponibilidad" // asientos libres de una fecha
-	OpCrearReserva            OperacionDB = "crear_reserva"            // guardar la reserva
+	OpCrearReserva OperacionDB = "crear_reserva" // guardar la reserva
+	OpModificarReserva OperacionDB = "modificar_reserva" // cambiar fecha o asientos de una reserva
+	OpCancelarReserva OperacionDB = "cancelar_reserva" // liberar los asientos de una reserva
 )
 
-// estados de una reserva, quedan listos para cuando se haga la cancelacion
+// estados de una reserva, la cancelacion pasa de activa a cancelada
 const (
-	ReservaActiva    = "ACTIVA"    // reserva vigente
+	ReservaActiva = "ACTIVA" // reserva vigente
 	ReservaCancelada = "CANCELADA" // reserva cancelada
 )
 
 // Ocurrencia es una fecha concreta de un evento con sus propios asientos
 type Ocurrencia struct {
-	IdOcurrencia        int    `json:"id_ocurrencia"`        // primera o segunda fecha del evento
-	Fecha               string `json:"fecha"`                // fecha en formato aaaa-mm-dd
-	CapacidadTotal      int    `json:"capacidad_total"`      // asientos totales
-	AsientosDisponibles int    `json:"asientos_disponibles"` // asientos libres
-	AsientosVendidos    int    `json:"asientos_vendidos"`    // asientos vendidos
+	IdOcurrencia int `json:"id_ocurrencia"` // primera o segunda fecha del evento
+	Fecha string `json:"fecha"` // fecha en formato aaaa-mm-dd
+	CapacidadTotal int `json:"capacidad_total"` // asientos totales
+	AsientosDisponibles int `json:"asientos_disponibles"` // asientos libres
+	AsientosVendidos int `json:"asientos_vendidos"` // asientos vendidos
 }
 
 // Evento es un evento con su lista de fechas
 type Evento struct {
-	IdEvento    string       `json:"id_evento"`   // identificador como E1
-	Nombre      string       `json:"nombre"`      // nombre del evento
+	IdEvento string `json:"id_evento"` // identificador como E1
+	Nombre string `json:"nombre"` // nombre del evento
 	Ocurrencias []Ocurrencia `json:"ocurrencias"` // sus fechas
 }
 
 // Reserva es una reserva ya guardada, se guarda por cantidad de asientos y no por silla
 type Reserva struct {
-	IdReserva        string    `json:"id_reserva"`        // la genera la base como R0001
-	IdCliente        string    `json:"id_cliente"`        // quien reservo
-	IdOcurrencia     int       `json:"id_ocurrencia"`     // fecha del evento
-	IdEvento         string    `json:"id_evento"`         // evento reservado
-	CantidadAsientos int       `json:"cantidad_asientos"` // cuantos asientos
-	Estado           string    `json:"estado"`            // activa o cancelada
-	Creada           string    `json:"creada"`            // cuando se creo
-	FechaHora        time.Time `json:"fecha_hora"`        // hoy no se llena en ningun lado
+	IdReserva string `json:"id_reserva"` // la genera la base como R0001
+	IdCliente string `json:"id_cliente"` // quien reservo
+	IdOcurrencia int `json:"id_ocurrencia"` // fecha del evento
+	IdEvento string `json:"id_evento"` // evento reservado
+	CantidadAsientos int `json:"cantidad_asientos"` // cuantos asientos
+	Estado string `json:"estado"` // activa o cancelada
+	Creada string `json:"creada"` // cuando se creo
+	FechaHora time.Time `json:"fecha_hora"` // hoy no se llena en ningun lado
 }
 
 // Solicitud es lo que manda el cliente, consulta usa mes y reserva usa evento fecha y asientos
+// modificacion usa la reserva y uno solo de nueva cantidad o nueva ocurrencia
+// cancelacion usa la reserva y la direccion donde el cliente espera la notificacion
 type Solicitud struct {
-	IdSolicitud      string        `json:"id_solicitud"`      // id unico, la base lo usa para no ejecutar dos veces lo mismo
-	IdCliente        string        `json:"id_cliente"`        // quien la hace
-	Tipo             TipoSolicitud `json:"tipo"`              // consulta o reserva
-	Mes              string        `json:"mes,omitempty"`     // mes a consultar como 2026-11
-	IdEvento         string        `json:"id_evento"`         // evento a reservar
-	IdOcurrencia     int           `json:"id_ocurrencia"`     // fecha a reservar
-	CantidadAsientos int           `json:"cantidad_asientos"` // cuantos asientos
-	FechaHora        time.Time     `json:"fecha_hora"`        // hoy no se llena en ningun lado
+	IdSolicitud string `json:"id_solicitud"` // id unico, la base lo usa para no ejecutar dos veces lo mismo
+	IdCliente string `json:"id_cliente"` // quien la hace
+	Tipo TipoSolicitud `json:"tipo"` // consulta, reserva, modificacion o cancelacion
+	Mes string `json:"mes,omitempty"` // mes a consultar como 2026-11
+	IdEvento string `json:"id_evento"` // evento a reservar
+	IdOcurrencia int `json:"id_ocurrencia"` // fecha a reservar
+	CantidadAsientos int `json:"cantidad_asientos"` // cuantos asientos
+	FechaHora time.Time `json:"fecha_hora"` // cuando se hizo la solicitud
+	IdReserva string `json:"id_reserva,omitempty"` // reserva a modificar o cancelar
+	NuevaCantidad int `json:"nueva_cantidad,omitempty"` // modificacion de asientos
+	NuevaOcurrencia int `json:"nueva_ocurrencia,omitempty"` // modificacion de fecha
+	DireccionNotificacion string `json:"direccion_notificacion,omitempty"` // cancelacion, donde escucha el cliente
 }
 
 // Respuesta es lo que se devuelve en todas las operaciones
 type Respuesta struct {
-	IdSolicitud         string   `json:"id_solicitud"`                   // a que solicitud responde
-	Exito               bool     `json:"exito"`                          // true si se pudo
-	Mensaje             string   `json:"mensaje"`                        // texto que ve el cliente
-	Eventos             []Evento `json:"eventos,omitempty"`              // eventos de una consulta
-	Reserva             *Reserva `json:"reserva,omitempty"`              // reserva creada, puede venir vacia
-	AsientosDisponibles int      `json:"asientos_disponibles,omitempty"` // asientos libres
-	Instancia           string   `json:"instancia,omitempty"`            // ESCALABILIDAD HORIZONTAL, cual rmc atendio
+	IdSolicitud string `json:"id_solicitud"` // a que solicitud responde
+	Exito bool `json:"exito"` // true si se pudo
+	Mensaje string `json:"mensaje"` // texto que ve el cliente
+	Eventos []Evento `json:"eventos,omitempty"` // eventos de una consulta
+	Reserva *Reserva `json:"reserva,omitempty"` // reserva creada, puede venir vacia
+	AsientosDisponibles int `json:"asientos_disponibles,omitempty"` // asientos libres
+	Instancia string `json:"instancia,omitempty"` // ESCALABILIDAD HORIZONTAL, cual rmc atendio
 }
 
 // PeticionDB es lo que rmc le manda a persistencia, la operacion mas la solicitud original
 type PeticionDB struct {
 	Operacion OperacionDB `json:"operacion"` // que hacer en la base
-	Solicitud Solicitud   `json:"solicitud"` // datos del cliente
+	Solicitud Solicitud `json:"solicitud"` // datos del cliente
 }
 
 // NuevoID genera un id unico con el nombre del cliente y 8 bytes aleatorios
@@ -131,6 +141,28 @@ func (s Solicitud) Validar() error {
 		if s.CantidadAsientos < 1 {
 			return errors.New("hay que pedir por lo menos 1 asiento")
 		}
+	case TipoModificacion:
+		// debe decir la reserva
+		if s.IdReserva == "" {
+			return errors.New("falta decir cual reserva")
+		}
+		// validacion numeros negativos
+		if s.NuevaCantidad < 0 || s.NuevaOcurrencia < 0 {
+			return errors.New("la nueva cantidad o fecha no pueden ser negativas")
+		}
+		// se cambia una sola cosa por solicitud, asientos o fecha
+		if (s.NuevaCantidad > 0) == (s.NuevaOcurrencia > 0) {
+			return errors.New("hay que cambiar los asientos o la fecha, una sola de las dos")
+		}
+	case TipoCancelacion:
+		// debe decir la reserva
+		if s.IdReserva == "" {
+			return errors.New("falta decir cual reserva")
+		}
+		// debe decir donde quiere la notificacion
+		if !strings.HasPrefix(s.DireccionNotificacion, "tcp://") {
+			return errors.New("la direccion de notificacion debe empezar con tcp://")
+		}
 	default:
 		// tipo desconocido
 		return fmt.Errorf("no se reconoce la operacion %q", s.Tipo)
@@ -147,6 +179,13 @@ func (s Solicitud) Resumen() string {
 		return fmt.Sprintf("%s consulta los eventos de %s", s.IdCliente, s.Mes)
 	case TipoReserva:
 		return fmt.Sprintf("%s pide %s de %s en la fecha %d", s.IdCliente, Asientos(s.CantidadAsientos), s.IdEvento, s.IdOcurrencia)
+	case TipoModificacion:
+		if s.NuevaOcurrencia > 0 {
+			return fmt.Sprintf("%s pide pasar la reserva %s a la fecha %d", s.IdCliente, s.IdReserva, s.NuevaOcurrencia)
+		}
+		return fmt.Sprintf("%s pide dejar la reserva %s en %s", s.IdCliente, s.IdReserva, Asientos(s.NuevaCantidad))
+	case TipoCancelacion:
+		return fmt.Sprintf("%s pide cancelar la reserva %s", s.IdCliente, s.IdReserva)
 	}
 	// tipo desconocido
 	return fmt.Sprintf("%s manda una solicitud de tipo %q", s.IdCliente, s.Tipo)

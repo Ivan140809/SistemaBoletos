@@ -17,64 +17,47 @@
 package main
 
 import (
-	"context"       // pone limite de tiempo a las operaciones
-	"encoding/json" // convierte mensajes a json y de vuelta
-	"flag"          // lee las opciones de la terminal
-	"fmt"           // imprime texto en pantalla
-	"log"           // imprime mensajes con la hora
-	"os"            // lee variables de entorno
-	"runtime"       // permite fijar una goroutine a un hilo
-	"time"          // maneja duraciones de tiempo
+	"context"
+	"encoding/json"
+	"flag"
+	"fmt"
+	"log"
+	"os"
+	"runtime"
+	"time"
 
-	zmq "github.com/pebbe/zmq4" // libreria de zeromq para los sockets
+	zmq "github.com/pebbe/zmq4"
 
-	"sistemaboletos/internal/db"    // acceso a la base de datos
-	"sistemaboletos/internal/model" // tipos compartidos del sistema
+	"sistemaboletos/internal/db"
+	"sistemaboletos/internal/model"
 )
 
 // main arranca todo el servicio
 func main() {
-	// puerto donde escucha el servicio
 	direccion := flag.String("bind", "tcp://*:5560", "endpoint REP donde escucha el servicio")
-	// cadena de conexion a supabase, sale del .env que carga machine3_storage.sh
 	dsn := flag.String("dsn", os.Getenv("DATABASE_URL"), "cadena de conexion a supabase, por defecto la de DATABASE_URL")
-	// archivo json para cargar la base desde cero
 	inicial := flag.String("inicial", "", "archivo json con el estado inicial")
-	// si es true se inventan eventos de prueba
 	generar := flag.Bool("generar", false, "genera eventos de prueba automaticamente")
-	// mes de los eventos inventados
 	mes := flag.String("mes", "2026-11", "mes de los eventos generados")
-	// cuantos eventos se inventan
 	eventos := flag.Int("eventos", 50, "cantidad de eventos a generar")
-	// cuantos eventos se repiten dos veces
 	dobles := flag.Int("dobles", 20, "cuantos de esos eventos se repiten dos veces en el mes")
-	// asientos de cada fecha
 	asientos := flag.Int("asientos", 100, "asientos por ocurrencia")
-	// si es true se imprime la tabla despues de cada reserva
 	tabla := flag.Bool("tabla", true, "muestra la base despues de cada reserva")
-	// si es true solo se muestra la base y se sale
 	ver := flag.Bool("ver", false, "muestra como esta la base y se sale")
-	// tiempo maximo de cada operacion en la base
 	limite := flag.Duration("limite", 5*time.Second, "tiempo maximo para cada operacion en la base")
 	// ESCALABILIDAD VERTICAL, cuantos workers atienden en paralelo
 	workers := flag.Int("workers", 4, "cuantas peticiones atiende persistencia en paralelo")
 	// escalabilidad de lectura, cadena de la replica opcional
 	dsnLectura := flag.String("dsn-lectura", os.Getenv("DATABASE_URL_LECTURA"), "cadena de conexion a una replica de solo lectura (opcional)")
-	// lee todas las opciones que se pasaron
 	flag.Parse()
-	// nunca menos de un worker
 	if *workers < 1 {
 		*workers = 1
 	}
 
-	// los mensajes salen por la terminal
 	log.SetOutput(os.Stdout)
-	// cada mensaje empieza con persistencia
 	log.SetPrefix("persistencia ")
-	// cada mensaje lleva la hora con microsegundos
 	log.SetFlags(log.Ltime | log.Lmicroseconds)
 
-	// sin cadena de conexion no se puede seguir
 	if *dsn == "" {
 		log.Fatal("no hay a donde conectarse, falta DATABASE_URL en el .env o el flag -dsn")
 	}
@@ -82,11 +65,9 @@ func main() {
 	conexiones := int32(*workers + 1)
 	// aqui se crea el pool de conexiones a supabase y se aplica schema.sql
 	base, err := db.Conectar(*dsn, conexiones)
-	// si no conecta se detiene el programa
 	if err != nil {
 		log.Fatal(err)
 	}
-	// cierra la base al terminar
 	defer base.Cerrar()
 	// si hay replica se usa para las consultas de eventos
 	if *dsnLectura != "" {
@@ -97,14 +78,13 @@ func main() {
 		log.Printf("las consultas de eventos van a la replica de lectura")
 	}
 
-	// con -ver se imprime la base y se sale sin borrar nada
+	// con -ver solo muestra el estado de la base y sale, nunca borra nada
 	if *ver {
 		mostrarTabla(base, *limite)
 		return
 	}
-	// si hay estado inicial se borra la base y se carga de nuevo
+	// con -inicial o -generar se borra la base y se carga el estado inicial, solo en la m3
 	if *generar || *inicial != "" {
-		// lista de eventos que se van a cargar
 		var iniciales []model.Evento
 		// aca se crean los eventos, inventados o leidos del json
 		if *generar {
@@ -112,11 +92,9 @@ func main() {
 		} else {
 			iniciales, err = db.LeerEventos(*inicial)
 		}
-		// si se armaron bien se borra la base y se cargan
 		if err == nil {
 			err = base.Reiniciar(context.Background(), iniciales)
 		}
-		// si algo fallo se detiene el programa
 		if err != nil {
 			log.Fatalf("no se pudo cargar el estado inicial: %v", err)
 		}
@@ -128,9 +106,7 @@ func main() {
 	if err != nil {
 		log.Fatal(err)
 	}
-	// cierra el router al terminar
 	defer frontend.Close()
-	// abre el puerto 5560 para que los rmc se conecten
 	if err := frontend.Bind(*direccion); err != nil {
 		log.Fatalf("no se pudo abrir %s: %v", *direccion, err)
 	}
@@ -139,16 +115,13 @@ func main() {
 	if err != nil {
 		log.Fatal(err)
 	}
-	// cierra el dealer al terminar
 	defer backend.Close()
-	// abre la direccion interna antes de que los workers se conecten
 	if err := backend.Bind("inproc://workers"); err != nil {
 		log.Fatal(err)
 	}
 
 	// aca se crea el canal de avisos para reimprimir la tabla, con espacio para uno
 	avisos := make(chan struct{}, 1)
-	// si la tabla esta activa se lanza la goroutine que la imprime
 	if *tabla {
 		go imprimirTabla(base, *limite, avisos)
 	}
@@ -156,9 +129,7 @@ func main() {
 	for i := 1; i <= *workers; i++ {
 		go trabajador(i, base, *limite, avisos) // cada worker se conecta al dealer interno
 	}
-	// avisa que el servicio ya esta listo
 	log.Printf("listo, escuchando en %s con %d workers", *direccion, *workers)
-	// muestra como arranca la base
 	fmt.Println("estado inicial de la base")
 	mostrarTabla(base, *limite)
 
@@ -177,36 +148,26 @@ func trabajador(n int, base *db.BaseDatos, limite time.Duration, avisos chan str
 	if err != nil {
 		log.Fatal(err)
 	}
-	// cierra el socket al terminar
 	defer socket.Close()
 	// se conecta al dealer interno
 	if err := socket.Connect("inproc://workers"); err != nil {
 		log.Fatal(err)
 	}
-	// repite para siempre
 	for {
-		// espera una peticion
 		mensaje, err := socket.RecvBytes(0)
-		// si falla se salta y espera la siguiente
 		if err != nil {
 			log.Printf("worker %d no pudo recibir: %v", n, err)
 			continue
 		}
-		// le pone un tiempo maximo a la operacion
 		ctx, cancelar := context.WithTimeout(context.Background(), limite)
-		// hace la operacion en la base
 		respuesta, cambio := atender(ctx, base, mensaje)
-		// libera el tiempo maximo
 		cancelar()
-		// convierte la respuesta a json
 		datos, _ := json.Marshal(respuesta)
 		// un socket rep siempre tiene que responder
 		if _, err := socket.SendBytes(datos, 0); err != nil {
 			log.Printf("worker %d no pudo responder: %v", n, err)
 		}
-		// si hubo una reserva se pide reimprimir la tabla
 		if cambio {
-			// avisa sin bloquear y si ya hay un aviso pendiente se descarta
 			select {
 			case avisos <- struct{}{}:
 			default:
@@ -217,7 +178,6 @@ func trabajador(n int, base *db.BaseDatos, limite time.Duration, avisos chan str
 
 // imprimirTabla reimprime la base cada vez que llega un aviso
 func imprimirTabla(base *db.BaseDatos, limite time.Duration, avisos chan struct{}) {
-	// espera avisos para siempre
 	for range avisos {
 		mostrarTabla(base, limite)
 	}
@@ -230,26 +190,19 @@ func atender(ctx context.Context, base *db.BaseDatos, mensaje []byte) (model.Res
 	if err := json.Unmarshal(mensaje, &peticion); err != nil {
 		return model.Respuesta{Mensaje: "no se pudo leer la peticion: " + err.Error()}, false
 	}
-	// datos de la solicitud del cliente
 	s := peticion.Solicitud
-	// respuesta que se va a devolver
 	var resp model.Respuesta
-	// error si algo sale mal
 	var err error
-	// segun la operacion se llama al metodo de db que toca
 	switch peticion.Operacion {
-	// consultar los eventos de un mes
 	case model.OpConsultarEventos:
 		var eventos []model.Evento
 		eventos, err = base.ConsultarEventos(ctx, s.Mes)
-		// mensaje con cuantos eventos se encontraron
 		encontrados := fmt.Sprintf("se encontraron %d eventos en %s", len(eventos), s.Mes)
 		if len(eventos) == 1 {
 			encontrados = fmt.Sprintf("se encontro 1 evento en %s", s.Mes)
 		}
 		// aqui se crea la respuesta con los eventos
 		resp = model.Respuesta{IdSolicitud: s.IdSolicitud, Exito: true, Mensaje: encontrados, Eventos: eventos}
-	// consultar los asientos libres de una fecha
 	case model.OpConsultarDisponibilidad:
 		var disponibles int
 		disponibles, err = base.Disponibilidad(ctx, s.IdEvento, s.IdOcurrencia)
@@ -258,35 +211,33 @@ func atender(ctx context.Context, base *db.BaseDatos, mensaje []byte) (model.Res
 	// aqui se crea la reserva en la base
 	case model.OpCrearReserva:
 		resp, err = base.CrearReserva(ctx, s)
-	// operacion que no existe
+		// cambia los asientos o la fecha de una reserva
+	case model.OpModificarReserva:
+		resp, err = base.ModificarReserva(ctx, s)
+	// libera los asientos de una reserva
+	case model.OpCancelarReserva:
+		resp, err = base.CancelarReserva(ctx, s)
 	default:
 		err = fmt.Errorf("no se reconoce la operacion %q", peticion.Operacion)
 	}
-	// si algo fallo se responde solo con el error
 	if err != nil {
 		resp = model.Respuesta{IdSolicitud: s.IdSolicitud, Mensaje: err.Error()}
 	}
-	// deja registro de lo que paso
 	log.Printf("%s (%s), %s: %s", s.Resumen(), queHace(peticion.Operacion), model.Resultado(resp.Exito), resp.Mensaje)
-	// true solo si se creo una reserva con exito
-	cambio := resp.Exito && peticion.Operacion == model.OpCrearReserva
+	escribe := peticion.Operacion == model.OpCrearReserva || peticion.Operacion == model.OpModificarReserva || peticion.Operacion == model.OpCancelarReserva
+	cambio := resp.Exito && escribe
 	return resp, cambio
 }
 
 // mostrarTabla imprime los eventos con sus asientos y la lista de reservas
 func mostrarTabla(base *db.BaseDatos, limite time.Duration) {
-	// le pone un tiempo maximo a la lectura
 	ctx, cancelar := context.WithTimeout(context.Background(), limite)
-	// libera el tiempo maximo al terminar
 	defer cancelar()
-	// arma el texto de la tabla desde la base
 	tabla, err := base.Tabla(ctx, true)
-	// si no se pudo leer se avisa y se sale
 	if err != nil {
 		log.Printf("no se pudo leer la base: %v", err)
 		return
 	}
-	// imprime la tabla
 	fmt.Print(tabla)
 }
 
@@ -299,7 +250,11 @@ func queHace(op model.OperacionDB) string {
 		return "revisa cupos"
 	case model.OpCrearReserva:
 		return "guarda la reserva"
+	
+	case model.OpModificarReserva:
+		return "modifica la reserva"
+	case model.OpCancelarReserva:
+		return "libera los asientos"
 	}
-	// si no es ninguna se deja el nombre tal cual
 	return string(op)
 }

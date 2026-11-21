@@ -22,7 +22,6 @@ fecha date NOT NULL,
 capacidad_total integer NOT NULL CHECK (capacidad_total >=1),
 asientos_disponibles integer NOT NULL,
 asientos_vendidos integer NOT NULL DEFAULT 0,
--- la llave es el evento junto con el numero de fecha
 PRIMARY KEY (id_evento, id_ocurrencia),
 -- red de seguridad, nunca asientos negativos
 CONSTRAINT asientos_no_negativos CHECK (asientos_disponibles >= 0 AND asientos_vendidos >= 0),
@@ -43,7 +42,6 @@ cantidad_asientos integer NOT NULL CHECK (cantidad_asientos > 0),
 -- el estado ya contempla cancelada para la segunda entrega
 estado text NOT NULL DEFAULT 'ACTIVA' CHECK (estado IN ('ACTIVA', 'CANCELADA')),
 creada_en timestamptz NOT NULL DEFAULT now(),
--- la reserva debe apuntar a una fecha que exista
 FOREIGN KEY (id_evento, id_ocurrencia) REFERENCES srb.ocurrencias (id_evento, id_ocurrencia)
 );
 
@@ -98,13 +96,9 @@ p_cantidad integer)
 RETURNS jsonb
 LANGUAGE plpgsql AS $$
 DECLARE
--- respuesta que se va a devolver
 v_respuesta jsonb;
--- asientos libres despues de restar
 v_disponibles integer;
--- numero de la nueva reserva
 v_numero bigint;
--- la reserva creada
 v_reserva srb.reservas;
 BEGIN
 -- paso 0, la cantidad debe ser al menos 1
@@ -134,7 +128,6 @@ UPDATE srb.ocurrencias
 
 -- si no se modifico ninguna fila es porque no existe o porque no alcanzan
 IF NOT FOUND THEN
-        -- consulta cuantos quedan para saber cual de las dos fue
         SELECT asientos_disponibles INTO v_disponibles
           FROM srb.ocurrencias
          WHERE id_evento = p_id_evento AND id_ocurrencia = p_id_ocurrencia;
@@ -162,7 +155,194 @@ IF NOT FOUND THEN
 
     -- paso 4, guarda la respuesta en el libro por si la solicitud llega repetida
     UPDATE srb.solicitudes_procesadas SET respuesta = v_respuesta WHERE id_solicitud = p_id_solicitud;
-    -- devuelve la respuesta
     RETURN v_respuesta;
+END;
+$$;
+
+-- aqui se crea modificar_reserva, cambia los asientos o la fecha de una reserva en una sola transaccion distribuida.
+-- si la modificacion no se puede hacer se rechaza y la reserva queda exactamente como estaba
+CREATE OR REPLACE FUNCTION srb.modificar_reserva(
+p_id_solicitud text,
+p_id_cliente text,
+p_id_reserva text,
+p_nueva_cantidad integer,
+p_nueva_ocurrencia integer)
+RETURNS jsonb
+LANGUAGE plpgsql AS $$
+DECLARE
+-- respuesta que se va a devolver
+v_respuesta jsonb;
+-- la reserva antes y despues del cambio
+v_reserva srb.reservas;
+-- diferencia de asientos cuando se cambia la cantidad
+v_diferencia integer;
+-- cuantas fechas tiene el evento
+v_fechas integer;
+-- asientos libres de la fecha despues del cambio
+v_disponibles integer;
+BEGIN
+-- paso 0, se cambia una sola cosa, los asientos o la fecha
+IF (coalesce(p_nueva_cantidad, 0) > 0) = (coalesce(p_nueva_ocurrencia, 0) > 0) THEN
+    RETURN srb.rechazo(p_id_solicitud, 'hay que cambiar los asientos o la fecha, una sola de las dos');
+END IF;
+-- paso 1, idempotencia, igual que en crear_reserva
+INSERT INTO srb.solicitudes_procesadas (id_solicitud, operacion)
+VALUES (p_id_solicitud, 'modificar_reserva')
+ON CONFLICT (id_solicitud) DO NOTHING;
+-- si ya existia devuelve la respuesta guardada sin tocar nada
+IF NOT FOUND THEN
+SELECT respuesta INTO v_respuesta FROM srb.solicitudes_procesadas WHERE id_solicitud = p_id_solicitud;
+RETURN v_respuesta;
+END IF;
+
+-- paso 2, bloquea la reserva para que nadie la cambie o la cancele al mismo tiempo
+SELECT * INTO v_reserva FROM srb.reservas WHERE id_reserva = p_id_reserva FOR UPDATE;
+IF NOT FOUND THEN
+    v_respuesta := srb.rechazo(p_id_solicitud, format('no existe la reserva %s', p_id_reserva));
+ELSIF v_reserva.id_cliente <> p_id_cliente THEN
+    -- un cliente solo puede tocar sus propias reservas
+    v_respuesta := srb.rechazo(p_id_solicitud, format('la reserva %s no es de %s', p_id_reserva, p_id_cliente));
+ELSIF v_reserva.estado <> 'ACTIVA' THEN
+    v_respuesta := srb.rechazo(p_id_solicitud, format('la reserva %s esta cancelada, no se puede modificar', p_id_reserva));
+END IF;
+
+-- paso 3, se bloquean las fechas del evento siempre en el mismo orden, asi dos modificaciones
+-- que cruzan fechas al mismo tiempo no se quedan esperandose una a la otra y no se produce deadlock
+IF v_respuesta IS NULL THEN
+    PERFORM 1 FROM srb.ocurrencias WHERE id_evento = v_reserva.id_evento ORDER BY id_ocurrencia FOR UPDATE;
+END IF;
+
+-- paso 4a, cambio de asientos en la misma fecha
+IF v_respuesta IS NULL AND coalesce(p_nueva_cantidad, 0) > 0 THEN
+    v_diferencia := p_nueva_cantidad - v_reserva.cantidad_asientos;
+    IF v_diferencia = 0 THEN
+        v_respuesta := srb.rechazo(p_id_solicitud, format('la reserva %s ya tiene %s', p_id_reserva, CASE WHEN p_nueva_cantidad = 1 THEN '1 asiento' ELSE p_nueva_cantidad || ' asientos' END));
+    ELSE
+        -- si pide mas resta los que faltan solo si alcanzan, si pide menos devuelve los que sobran
+        UPDATE srb.ocurrencias
+           SET asientos_disponibles = asientos_disponibles - v_diferencia,
+               asientos_vendidos = asientos_vendidos + v_diferencia
+         WHERE id_evento = v_reserva.id_evento
+           AND id_ocurrencia = v_reserva.id_ocurrencia
+           AND asientos_disponibles >= v_diferencia
+        RETURNING asientos_disponibles INTO v_disponibles;
+        IF NOT FOUND THEN
+            -- no alcanzan, no se cambio nada
+            SELECT asientos_disponibles INTO v_disponibles FROM srb.ocurrencias
+             WHERE id_evento = v_reserva.id_evento AND id_ocurrencia = v_reserva.id_ocurrencia;
+            v_respuesta := srb.rechazo(p_id_solicitud, format('no alcanzan los asientos para dejar la reserva %s en %s, faltan %s y %s', p_id_reserva, p_nueva_cantidad, v_diferencia, CASE v_disponibles WHEN 0 THEN 'no queda ninguno libre' WHEN 1 THEN 'solo queda 1 libre' ELSE 'solo quedan ' || v_disponibles || ' libres' END));
+        ELSE
+            -- se guarda la nueva cantidad en la reserva
+            UPDATE srb.reservas SET cantidad_asientos = p_nueva_cantidad WHERE id_reserva = p_id_reserva RETURNING * INTO v_reserva;
+            v_respuesta := jsonb_build_object(
+                'id_solicitud', p_id_solicitud,
+                'exito', true,
+                'mensaje', format('reserva %s modificada, ahora tiene %s de %s en la fecha %s', p_id_reserva, CASE WHEN p_nueva_cantidad = 1 THEN '1 asiento' ELSE p_nueva_cantidad || ' asientos' END, v_reserva.id_evento, v_reserva.id_ocurrencia),
+                'reserva', srb.reserva_json(v_reserva));
+        END IF;
+    END IF;
+END IF;
+
+-- paso 4b, cambio de fecha conservando el numero de asientos
+IF v_respuesta IS NULL AND coalesce(p_nueva_ocurrencia, 0) > 0 THEN
+    SELECT count(*) INTO v_fechas FROM srb.ocurrencias WHERE id_evento = v_reserva.id_evento;
+    IF v_fechas < 2 THEN
+        -- regla del enunciado, si el evento tiene una sola fecha solo se cambian los asientos
+        v_respuesta := srb.rechazo(p_id_solicitud, format('%s tiene una sola fecha en el mes, solo se puede cambiar el numero de asientos', v_reserva.id_evento));
+    ELSIF p_nueva_ocurrencia = v_reserva.id_ocurrencia THEN
+        v_respuesta := srb.rechazo(p_id_solicitud, format('la reserva %s ya es para la fecha %s', p_id_reserva, p_nueva_ocurrencia));
+    ELSE
+        -- ocupa los asientos en la nueva fecha solo si alcanzan
+        UPDATE srb.ocurrencias
+           SET asientos_disponibles = asientos_disponibles - v_reserva.cantidad_asientos,
+               asientos_vendidos = asientos_vendidos + v_reserva.cantidad_asientos
+         WHERE id_evento = v_reserva.id_evento
+           AND id_ocurrencia = p_nueva_ocurrencia
+           AND asientos_disponibles >= v_reserva.cantidad_asientos
+        RETURNING asientos_disponibles INTO v_disponibles;
+        IF NOT FOUND THEN
+            -- la fecha no existe o no alcanzan, no se cambio nada
+            SELECT asientos_disponibles INTO v_disponibles FROM srb.ocurrencias
+             WHERE id_evento = v_reserva.id_evento AND id_ocurrencia = p_nueva_ocurrencia;
+            IF v_disponibles IS NULL THEN
+                v_respuesta := srb.rechazo(p_id_solicitud, format('no existe %s con fecha %s', v_reserva.id_evento, p_nueva_ocurrencia));
+            ELSE
+                v_respuesta := srb.rechazo(p_id_solicitud, format('no alcanzan los asientos de %s en la fecha %s, la reserva tiene %s y %s', v_reserva.id_evento, p_nueva_ocurrencia, v_reserva.cantidad_asientos, CASE v_disponibles WHEN 0 THEN 'no queda ninguno' WHEN 1 THEN 'solo queda 1' ELSE 'solo quedan ' || v_disponibles END));
+            END IF;
+        ELSE
+            -- libera los asientos de la fecha vieja
+            UPDATE srb.ocurrencias
+               SET asientos_disponibles = asientos_disponibles + v_reserva.cantidad_asientos,
+                   asientos_vendidos = asientos_vendidos - v_reserva.cantidad_asientos
+             WHERE id_evento = v_reserva.id_evento AND id_ocurrencia = v_reserva.id_ocurrencia;
+            -- mueve la reserva a la nueva fecha
+            UPDATE srb.reservas SET id_ocurrencia = p_nueva_ocurrencia WHERE id_reserva = p_id_reserva RETURNING * INTO v_reserva;
+            v_respuesta := jsonb_build_object(
+                'id_solicitud', p_id_solicitud,
+                'exito', true,
+                'mensaje', format('reserva %s modificada, ahora es para la fecha %s de %s con %s', p_id_reserva, p_nueva_ocurrencia, v_reserva.id_evento, CASE WHEN v_reserva.cantidad_asientos = 1 THEN '1 asiento' ELSE v_reserva.cantidad_asientos || ' asientos' END),
+                'reserva', srb.reserva_json(v_reserva));
+        END IF;
+    END IF;
+END IF;
+
+-- paso 5, guarda la respuesta en el libro por si la solicitud llega repetida
+UPDATE srb.solicitudes_procesadas SET respuesta = v_respuesta WHERE id_solicitud = p_id_solicitud;
+RETURN v_respuesta;
+END;
+$$;
+
+-- aqui se crea cancelar_reserva, libera los asientos y marca la reserva como cancelada en una sola transaccion
+CREATE OR REPLACE FUNCTION srb.cancelar_reserva(
+p_id_solicitud text,
+p_id_cliente text,
+p_id_reserva text)
+RETURNS jsonb
+LANGUAGE plpgsql AS $$
+DECLARE
+-- respuesta que se va a devolver
+v_respuesta jsonb;
+-- la reserva a cancelar
+v_reserva srb.reservas;
+-- asientos libres despues de liberar
+v_disponibles integer;
+BEGIN
+-- paso 1, idempotencia, si la cancelacion llega repetida no se liberan los asientos dos veces
+INSERT INTO srb.solicitudes_procesadas (id_solicitud, operacion)
+VALUES (p_id_solicitud, 'cancelar_reserva')
+ON CONFLICT (id_solicitud) DO NOTHING;
+IF NOT FOUND THEN
+SELECT respuesta INTO v_respuesta FROM srb.solicitudes_procesadas WHERE id_solicitud = p_id_solicitud;
+RETURN v_respuesta;
+END IF;
+
+-- paso 2, bloquea la reserva para que nadie la modifique mientras se cancela
+SELECT * INTO v_reserva FROM srb.reservas WHERE id_reserva = p_id_reserva FOR UPDATE;
+IF NOT FOUND THEN
+    v_respuesta := srb.rechazo(p_id_solicitud, format('no existe la reserva %s', p_id_reserva));
+ELSIF v_reserva.id_cliente <> p_id_cliente THEN
+    -- un cliente solo puede cancelar sus propias reservas
+    v_respuesta := srb.rechazo(p_id_solicitud, format('la reserva %s no es de %s', p_id_reserva, p_id_cliente));
+ELSIF v_reserva.estado <> 'ACTIVA' THEN
+    v_respuesta := srb.rechazo(p_id_solicitud, format('la reserva %s ya estaba cancelada', p_id_reserva));
+ELSE
+    -- paso 3, devuelve los asientos a la fecha
+    UPDATE srb.ocurrencias
+       SET asientos_disponibles = asientos_disponibles + v_reserva.cantidad_asientos,
+           asientos_vendidos = asientos_vendidos - v_reserva.cantidad_asientos
+     WHERE id_evento = v_reserva.id_evento AND id_ocurrencia = v_reserva.id_ocurrencia
+    RETURNING asientos_disponibles INTO v_disponibles;
+    -- paso 4, marca la reserva como cancelada, no se borra para que quede el historial
+    UPDATE srb.reservas SET estado = 'CANCELADA' WHERE id_reserva = p_id_reserva RETURNING * INTO v_reserva;
+    v_respuesta := jsonb_build_object(
+        'id_solicitud', p_id_solicitud,
+        'exito', true,
+        'mensaje', format('reserva %s cancelada, se liberaron %s de %s en la fecha %s, ahora quedan %s libres', p_id_reserva, CASE WHEN v_reserva.cantidad_asientos = 1 THEN '1 asiento' ELSE v_reserva.cantidad_asientos || ' asientos' END, v_reserva.id_evento, v_reserva.id_ocurrencia, v_disponibles),
+        'reserva', srb.reserva_json(v_reserva));
+END IF;
+
+-- paso 5, guarda la respuesta en el libro por si la cancelacion llega repetida
+UPDATE srb.solicitudes_procesadas SET respuesta = v_respuesta WHERE id_solicitud = p_id_solicitud;
+RETURN v_respuesta;
 END;
 $$;

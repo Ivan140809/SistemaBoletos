@@ -34,9 +34,7 @@ func Conectar(dsn string, conexiones int32) (*BaseDatos, error) {
 	if err != nil {
 		return nil, err
 	}
-	// tiempo maximo de 30 segundos para aplicar el esquema
 	ctx, cancelar := context.WithTimeout(context.Background(), 30*time.Second)
-	// libera el tiempo maximo al terminar
 	defer cancelar()
 	// aqui se crean las tablas que falten corriendo schema.sql sin tocar los datos
 	if _, err := pool.Exec(ctx, esquema); err != nil {
@@ -62,28 +60,22 @@ func (b *BaseDatos) UsarReplica(dsn string, conexiones int32) error {
 
 // abrirPool crea un pool de conexiones y prueba que funcione
 func abrirPool(dsn string, conexiones int32) (*pgxpool.Pool, error) {
-	// lee la cadena de conexion
 	config, err := pgxpool.ParseConfig(dsn)
 	if err != nil {
 		return nil, fmt.Errorf("la cadena de conexion no es valida: %w", err)
 	}
-	// maximo de conexiones a la vez, no subirlo mucho porque supabase gratis permite unas 15
 	config.MaxConns = conexiones
 	// aqui se crea el pool de conexiones
 	pool, err := pgxpool.NewWithConfig(context.Background(), config)
 	if err != nil {
 		return nil, err
 	}
-	// tiempo maximo de 30 segundos para conectar
 	ctx, cancelar := context.WithTimeout(context.Background(), 30*time.Second)
-	// libera el tiempo maximo al terminar
 	defer cancelar()
-	// prueba que la conexion de verdad funciona
 	if err := pool.Ping(ctx); err != nil {
 		pool.Close()
 		return nil, fmt.Errorf("no se pudo conectar a PostgreSQL: %w", err)
 	}
-	// devuelve el pool listo
 	return pool, nil
 }
 
@@ -94,11 +86,9 @@ func (b *BaseDatos) TieneReplica() bool {
 
 // Cerrar cierra todas las conexiones de los pools
 func (b *BaseDatos) Cerrar() {
-	// si hay replica tambien se cierra
 	if b.TieneReplica() {
 		b.lectura.Close()
 	}
-	// cierra la base principal
 	b.pool.Close()
 }
 
@@ -106,23 +96,17 @@ func (b *BaseDatos) Cerrar() {
 func (b *BaseDatos) Reiniciar(ctx context.Context, eventos []model.Evento) error {
 	// aqui se crea la transaccion, hace commit si todo sale bien o rollback si falla
 	return pgx.BeginFunc(ctx, b.pool, func(tx pgx.Tx) error {
-		// vacia las cuatro tablas
 		if _, err := tx.Exec(ctx, `TRUNCATE srb.solicitudes_procesadas, srb.reservas, srb.ocurrencias, srb.events`); err != nil {
 			return err
 		}
-		// reinicia el contador para que la primera reserva sea r0001
 		if _, err := tx.Exec(ctx, `ALTER SEQUENCE srb.reservas_seq RESTART`); err != nil {
 			return err
 		}
-		// listas de filas para cargar en bloque
 		var filasEventos, filasOcurrencias [][]any
-		// recorre cada evento
 		for i, evento := range eventos {
 			// aqui se crea la fila del evento con su posicion en el archivo
 			filasEventos = append(filasEventos, []any{evento.IdEvento, evento.Nombre, i + 1})
-			// recorre cada fecha del evento
 			for _, oc := range evento.Ocurrencias {
-				// convierte el texto de la fecha a fecha real
 				fecha, err := time.Parse("2006-01-02", oc.Fecha)
 				if err != nil {
 					return fmt.Errorf("el evento %s trae una fecha que no se entiende: %q", evento.IdEvento, oc.Fecha)
@@ -131,11 +115,9 @@ func (b *BaseDatos) Reiniciar(ctx context.Context, eventos []model.Evento) error
 				filasOcurrencias = append(filasOcurrencias, []any{evento.IdEvento, oc.IdOcurrencia, fecha, oc.CapacidadTotal, oc.AsientosDisponibles, oc.AsientosVendidos})
 			}
 		}
-		// carga primero los eventos porque las ocurrencias dependen de ellos
 		if _, err := tx.CopyFrom(ctx, pgx.Identifier{"srb", "events"}, []string{"id_evento", "nombre_evento", "posicion"}, pgx.CopyFromRows(filasEventos)); err != nil {
 			return err
 		}
-		// carga todas las ocurrencias en un solo viaje a la base
 		_, err := tx.CopyFrom(ctx, pgx.Identifier{"srb", "ocurrencias"},
 			[]string{"id_evento", "id_ocurrencia", "fecha", "capacidad_total", "asientos_disponibles", "asientos_vendidos"},
 			pgx.CopyFromRows(filasOcurrencias))
@@ -145,13 +127,11 @@ func (b *BaseDatos) Reiniciar(ctx context.Context, eventos []model.Evento) error
 
 // ConsultarEventos devuelve los eventos de un mes con sus asientos libres y vendidos
 func (b *BaseDatos) ConsultarEventos(ctx context.Context, mes string) ([]model.Evento, error) {
-	// convierte el mes al dia 1 de ese mes
 	inicio, err := time.Parse("2006-01", mes)
 	if err != nil {
 		return nil, fmt.Errorf("el mes %q no sirve, escribalo como 2026-11", mes)
 	}
 	// escalabilidad de lectura, esta consulta va a la replica si existe y asi descarga la principal
-	// trae las fechas desde el dia 1 del mes hasta antes del dia 1 del mes siguiente
 	filas, err := b.lectura.Query(ctx, `
 	SELECT id_evento, nombre_evento, id_ocurrencia, fecha, capacidad_total, asientos_disponibles, asientos_vendidos
 	FROM srb.vista_ocupacion
@@ -160,17 +140,13 @@ func (b *BaseDatos) ConsultarEventos(ctx context.Context, mes string) ([]model.E
 	if err != nil {
 		return nil, err
 	}
-	// junta las filas en eventos con sus fechas
 	return agruparEventos(filas)
 }
 
 // Disponibilidad devuelve cuantos asientos libres quedan en una fecha de un evento
 func (b *BaseDatos) Disponibilidad(ctx context.Context, idEvento string, idOcurrencia int) (int, error) {
-	// aqui se guarda el resultado
 	var disponibles int
-	// busca una sola fila y copia la columna en disponibles
 	err := b.pool.QueryRow(ctx, `SELECT asientos_disponibles FROM srb.ocurrencias WHERE id_evento = $1 AND id_ocurrencia = $2`, idEvento, idOcurrencia).Scan(&disponibles)
-	// si no hay fila es que el evento o la fecha no existen
 	if errors.Is(err, pgx.ErrNoRows) {
 		return 0, fmt.Errorf("no existe %s con fecha %d", idEvento, idOcurrencia)
 	}
@@ -183,9 +159,19 @@ func (b *BaseDatos) CrearReserva(ctx context.Context, s model.Solicitud) (model.
 	return b.llamar(ctx, `SELECT srb.crear_reserva($1, $2, $3, $4, $5)`, s.IdSolicitud, s.IdCliente, s.IdEvento, s.IdOcurrencia, s.CantidadAsientos)
 }
 
+// ModificarReserva deja el trabajo a la funcion sql de modificar la reserva en la tramsaccion
+func (b *BaseDatos) ModificarReserva(ctx context.Context, s model.Solicitud) (model.Respuesta, error) {
+	// aqui se modifica la reserva dentro de la base
+	return b.llamar(ctx, `SELECT srb.modificar_reserva($1, $2, $3, $4, $5)`, s.IdSolicitud, s.IdCliente, s.IdReserva, s.NuevaCantidad, s.NuevaOcurrencia)
+}
+
+// Cancelar reserva deja todo el trabajo a la funcion sql srb.CancelarReserva que librera los asientes y deja la reserva cancelada en una transaccion
+func (b *BaseDatos) CancelarReserva(ctx context.Context, s model.Solicitud) (model.Respuesta, error) {
+	// aqui se cancela la reserva dentro de la base
+	return b.llamar(ctx, `SELECT srb.cancelar_reserva($1, $2, $3)`, s.IdSolicitud, s.IdCliente, s.IdReserva)
+}
 // llamar ejecuta una funcion sql que devuelve json y lo pasa a una respuesta
 func (b *BaseDatos) llamar(ctx context.Context, sql string, argumentos ...any) (model.Respuesta, error) {
-	// aqui llega el json de la base
 	var datos []byte
 	// corre la funcion sql como una transaccion completa
 	if err := b.pool.QueryRow(ctx, sql, argumentos...).Scan(&datos); err != nil {
@@ -201,7 +187,6 @@ func (b *BaseDatos) llamar(ctx context.Context, sql string, argumentos ...any) (
 
 // Tabla arma el texto con el estado de la base que se imprime en persistencia
 func (b *BaseDatos) Tabla(ctx context.Context, conReservas bool) (string, error) {
-	// trae todos los eventos con sus fechas
 	filasEventos, err := b.pool.Query(ctx, `
 		SELECT id_evento, nombre_evento, id_ocurrencia, fecha, capacidad_total, asientos_disponibles, asientos_vendidos
 		FROM srb.vista_ocupacion
@@ -209,90 +194,72 @@ func (b *BaseDatos) Tabla(ctx context.Context, conReservas bool) (string, error)
 	if err != nil {
 		return "", err
 	}
-	// junta las filas en eventos
 	eventos, err := agruparEventos(filasEventos)
 	if err != nil {
 		return "", err
 	}
-	// aqui se crea el texto donde se va armando la tabla
 	var sb strings.Builder
-	// agrega la tabla de eventos
 	sb.WriteString(model.TablaEventos(eventos))
-	// cuenta cuantas reservas hay
 	var reservas int
 	if err := b.pool.QueryRow(ctx, `SELECT count(*) FROM srb.reservas`).Scan(&reservas); err != nil {
 		return "", err
 	}
-	// si no hay reservas lo dice y termina
 	if reservas == 0 {
 		sb.WriteString("todavia no hay reservas\n")
 		return sb.String(), nil
 	}
-	// escribe cuantas reservas hay
 	fmt.Fprintf(&sb, "reservas hechas: %d\n", reservas)
-	// si no pidieron el detalle termina aqui
 	if !conReservas {
 		return sb.String(), nil
 	}
-	// trae las reservas junto con la fecha de su ocurrencia
 	filasReservas, err := b.pool.Query(ctx, `
-		SELECT r.id_reserva, r.id_cliente, r.id_evento, r.cantidad_asientos, o.fecha
+		SELECT r.id_reserva, r.id_cliente, r.id_evento, r.cantidad_asientos, o.fecha, r.estado
 		FROM srb.reservas r
 		JOIN srb.ocurrencias o ON o.id_evento = r.id_evento AND o.id_ocurrencia = r.id_ocurrencia
 		ORDER BY r.creada_en, r.id_reserva`)
 	if err != nil {
 		return "", err
 	}
-	// cierra las filas al terminar
 	defer filasReservas.Close()
-	// recorre fila por fila
 	for filasReservas.Next() {
-		// datos de una reserva
 		var r model.Reserva
 		var fecha time.Time
-		// copia las columnas en la reserva
-		if err := filasReservas.Scan(&r.IdReserva, &r.IdCliente, &r.IdEvento, &r.CantidadAsientos, &fecha); err != nil {
+		if err := filasReservas.Scan(&r.IdReserva, &r.IdCliente, &r.IdEvento, &r.CantidadAsientos, &fecha, &r.Estado); err != nil {
 			return "", err
 		}
-		// singular o plural segun la cantidad
 		palabra := "asientos"
 		if r.CantidadAsientos == 1 {
 			palabra = "asiento"
 		}
+		// las canceladas se marcan para que se vea el historial
+		estado := ""
+		if r.Estado == model.ReservaCancelada {
+			estado = " (cancelada)"
+		}
 		// escribe la linea de la reserva
-		fmt.Fprintf(&sb, "   - %s: %s reservo %d %s de %s para el %s\n", r.IdReserva, r.IdCliente, r.CantidadAsientos, palabra, r.IdEvento, model.FechaLegible(fecha.Format("2006-01-02")))
+		fmt.Fprintf(&sb, "   - %s: %s reservo %d %s de %s para el %s%s\n", r.IdReserva, r.IdCliente, r.CantidadAsientos, palabra, r.IdEvento, model.FechaLegible(fecha.Format("2006-01-02")), estado)
 	}
-	// devuelve el texto y un error si el recorrido fallo
 	return sb.String(), filasReservas.Err()
 }
 
 // agruparEventos pasa las filas planas de la base a eventos con su lista de fechas
 func agruparEventos(filas pgx.Rows) ([]model.Evento, error) {
-	// cierra las filas al terminar
 	defer filas.Close()
-	// lista final de eventos
 	var eventos []model.Evento
-	// recorre fila por fila
 	for filas.Next() {
-		// datos de la fila actual
 		var idEvento, nombre string
 		var fecha time.Time
 		var oc model.Ocurrencia
-		// copia cada columna en su variable
 		if err := filas.Scan(&idEvento, &nombre, &oc.IdOcurrencia, &fecha, &oc.CapacidadTotal, &oc.AsientosDisponibles, &oc.AsientosVendidos); err != nil {
 			return nil, err
 		}
-		// guarda la fecha como texto
 		oc.Fecha = fecha.Format("2006-01-02")
 		// aqui se crea un evento nuevo si es la primera fila o cambio el evento
 		if len(eventos) == 0 || eventos[len(eventos)-1].IdEvento != idEvento {
 			eventos = append(eventos, model.Evento{IdEvento: idEvento, Nombre: nombre})
 		}
-		// toma el ultimo evento de la lista
 		ultimo := &eventos[len(eventos)-1]
-		// le agrega la fecha
 		ultimo.Ocurrencias = append(ultimo.Ocurrencias, oc)
 	}
-	// devuelve los eventos y un error si el recorrido fallo
 	return eventos, filas.Err()
 }
