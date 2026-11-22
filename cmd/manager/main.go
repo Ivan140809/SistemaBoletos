@@ -14,6 +14,14 @@
 // se saca de la lista y la solicitud que estaba atendiendo se le pasa a otro rmc con el mismo id,
 // asi el cliente recibe su respuesta sin enterarse de la falla y la base no la ejecuta dos veces.
 
+// TOLERANCIA A FALLAS DEL GT, patron binary star de la guia de zeromq (capitulo 4). se corren dos gt,
+// un primario y un respaldo, que se publican su estado (ACTIVO o PASIVO) cada segundo por pub/sub en
+// el puerto 5558. solo el activo atiende clientes. el respaldo toma el control cuando el primario lleva
+// tres intervalos sin dar senales y ademas le llega una solicitud de un cliente, asi si solo se cae el
+// enlace entre los dos gt no quedan dos activos. si el primario vuelve y ve al respaldo activo, se
+// queda pasivo. los rmc se registran en los dos gt, asi el respaldo ya tiene trabajadores al tomar el
+// control, y el cliente que no recibe respuesta reintenta en el otro gt con el mismo id de solicitud.
+
 package main
 
 import (
@@ -32,6 +40,12 @@ import (
 const (
 	listo  = "READY"     // estado del rmc
 	latido = "HEARTBEAT" // senal de vida de los dos sentidos
+)
+
+// estados del gt en binary star
+const (
+	activo = "ACTIVO" // atiende clientes
+	pasivo = "PASIVO" // vigila al otro gt y espera para tomar el control
 )
 
 // pendiente es una solicitud que espera un rmc o que un rmc esta atendiendo
@@ -60,6 +74,15 @@ type broker struct {
 	intervalo     time.Duration          // periodo de espera de latidos
 	vidas         int                    // cuantos intervalos sin senales se aguantan
 	espera        time.Duration          // cuanto puede esperar una solicitud en cola
+
+	// TOLERANCIA A FALLAS DEL GT, estado para binary star
+	rol        string      // primario o respaldo
+	estado     string      // ACTIVO o PASIVO
+	arrancando bool        // el primario recien arrancado espera un momento a ver si el respaldo esta activo
+	inicio     time.Time   // cuando arranco este gt
+	publicador *zmq.Socket // pub donde este gt anuncia su estado
+	par        *zmq.Socket // sub donde escucha el estado del otro gt, nil si corre solo
+	parVisto   time.Time   // ultima vez que el otro gt dio senales
 }
 
 // main arranca el gt y atiende mensajes para siempre
@@ -72,13 +95,40 @@ func main() {
 	vidas := flag.Int("vidas", 3, "cuantos heartbeats seguidos se pueden perder antes de dar un rmc por caido")
 	// TOLERANCIA A FALLAS, si no hay rmc vivos la solicitud espera un rato por si alguno se reconecta
 	espera := flag.Duration("espera", 4*time.Second, "cuanto espera una solicitud en cola si no hay ningun rmc vivo")
+	// TOLERANCIA A FALLAS DEL GT, rol de este gt, donde publica su estado y donde escucha al otro gt
+	rol := flag.String("rol", "primario", "primario o respaldo")
+	dirEstado := flag.String("estado", "tcp://*:5558", "endpoint PUB donde este gt publica su estado")
+	dirPar := flag.String("par", "", "endpoint PUB del otro gt, vacio si corre un solo gt")
 	flag.Parse()
 
 	log.SetOutput(os.Stdout)
 	log.SetPrefix("GT ")
+	if *dirPar != "" {
+		log.SetPrefix("GT-" + *rol + " ")
+	}
 	log.SetFlags(log.Ltime | log.Lmicroseconds)
 
-	b := &broker{trabajadores: map[string]*trabajador{}, caidos: map[string]bool{}, intervalo: *intervalo, vidas: *vidas, espera: *espera}
+	b := &broker{trabajadores: map[string]*trabajador{}, caidos: map[string]bool{}, intervalo: *intervalo, vidas: *vidas, espera: *espera, rol: *rol, inicio: time.Now()}
+	// TOLERANCIA A FALLAS DEL GT, sin otro gt este siempre esta activo, como antes
+	b.estado = activo
+	if *dirPar != "" {
+		// aqui se crea el pub donde este gt anuncia su estado
+		b.publicador = abrir(zmq.PUB, *dirEstado)
+		// aqui se crea el sub que escucha el estado del otro gt
+		par, err := zmq.NewSocket(zmq.SUB)
+		if err != nil {
+			log.Fatal(err)
+		}
+		par.SetSubscribe("")
+		if err := par.Connect(*dirPar); err != nil {
+			log.Fatalf("no se pudo conectar con el otro gt en %s: %v", *dirPar, err)
+		}
+		b.par = par
+		// el respaldo arranca pasivo, el primario espera un momento por si el respaldo ya esta activo
+		b.estado = pasivo
+		b.arrancando = *rol == "primario"
+		log.Printf("binary star, este gt es %s, publica su estado en %s y vigila al otro gt en %s", *rol, *dirEstado, *dirPar)
+	}
 	// aqui se crea el router que atiende a los clientes
 	b.frontend = abrir(zmq.ROUTER, *dirClientes)
 	// ESCALABILIDAD HORIZONTAL, aqui se conectan todos los rmc que se lancen
@@ -92,6 +142,9 @@ func main() {
 	poller := zmq.NewPoller()
 	poller.Add(b.frontend, zmq.POLLIN)
 	poller.Add(b.backend, zmq.POLLIN)
+	if b.par != nil {
+		poller.Add(b.par, zmq.POLLIN)
+	}
 
 	// TOLERANCIA A FALLAS, cuando toca mandar el siguiente heartbeat a los rmc
 	siguienteLatido := time.Now().Add(b.intervalo)
@@ -116,6 +169,8 @@ func main() {
 				// si el gt estuvo pausado los heartbeats atrasados no hacen que de por caido a un rmc vivo
 				for b.desdeRMC() {
 				}
+			case b.par:
+				b.desdePar()
 			}
 		}
 		// TOLERANCIA A FALLAS, cada intervalo manda heartbeats y revisa quien se cayo
@@ -123,8 +178,10 @@ func main() {
 			b.latir()
 			siguienteLatido = time.Now().Add(b.intervalo)
 		}
-		// reparte lo que haya en cola entre los rmc libres
-		b.repartir()
+		// reparte lo que haya en cola entre los rmc libres, solo si este gt es el activo
+		if b.estado == activo {
+			b.repartir()
+		}
 	}
 }
 
@@ -150,6 +207,19 @@ func (b *broker) desdeCliente() {
 	}
 	// la identidad dice a quien responder y el cuerpo es la solicitud
 	identidad, cuerpo := partes[0], partes[len(partes)-1]
+
+	// TOLERANCIA A FALLAS DEL GT, un gt pasivo no atiende clientes mientras el otro este vivo.
+	// contesta de una vez que esta pasivo, asi el cliente pasa al gt activo sin esperar su timeout
+	if b.estado != activo {
+		// el primario recien arrancado todavia no sabe si el respaldo esta activo, no toma el control
+		// por un cliente, espera a oir al otro gt o a que pase el tiempo de arranque
+		if b.parVivo() || b.arrancando {
+			responder(b.frontend, identidad, model.Respuesta{Mensaje: "este gt esta pasivo, la solicitud la atiende el otro gt", Instancia: model.GTPasivo})
+			return
+		}
+		// TOLERANCIA A FALLAS DEL GT, el otro gt no da senales y llego un cliente, este gt toma el control
+		b.activar("el otro gt no da senales y llego un cliente")
+	}
 
 	// aqui se crea la solicitud a partir del json
 	var s model.Solicitud
@@ -244,6 +314,14 @@ func (b *broker) desdeRMC() bool {
 // latir manda un heartbeat a cada rmc y saca a los que no han dado senales a tiempo
 func (b *broker) latir() {
 	ahora := time.Now()
+	// TOLERANCIA A FALLAS DEL GT, anuncia su estado al otro gt
+	if b.publicador != nil {
+		b.publicador.Send(b.estado, zmq.DONTWAIT)
+	}
+	// TOLERANCIA A FALLAS DEL GT, el primario que arranco y no vio al respaldo activo toma el control
+	if b.arrancando && ahora.Sub(b.inicio) >= time.Duration(b.vidas)*b.intervalo {
+		b.activar("arranco y el respaldo no esta activo")
+	}
 	for id, t := range b.trabajadores {
 		// TOLERANCIA A FALLAS, sigue vivo, se le manda el heartbeat del gt
 		if ahora.Before(t.expira) {
@@ -274,6 +352,49 @@ func (b *broker) latir() {
 		}
 		b.cola = siguen
 	}
+}
+
+// TOLERANCIA A FALLAS DEL GT, parVivo dice si el otro gt dio senales en los ultimos intervalos
+func (b *broker) parVivo() bool {
+	return b.par != nil && time.Since(b.parVisto) < time.Duration(b.vidas)*b.intervalo
+}
+
+// TOLERANCIA A FALLAS DEL GT, desdePar lee el estado que publica el otro gt
+func (b *broker) desdePar() {
+	for {
+		estado, err := b.par.Recv(zmq.DONTWAIT)
+		if err != nil {
+			return
+		}
+		b.parVisto = time.Now()
+		if estado != activo {
+			continue
+		}
+		// el otro gt esta activo
+		if b.arrancando {
+			// el primario volvio y el respaldo ya estaba atendiendo, el primario se queda de respaldo
+			b.arrancando = false
+			log.Printf("el otro gt esta activo, este %s se queda pasivo", b.rol)
+		} else if b.estado == activo && b.rol == "respaldo" {
+			// los dos activos, pasa si se cayo el enlace entre ellos y volvio, el respaldo cede
+			b.ceder("el primario tambien esta activo")
+		}
+	}
+}
+
+// TOLERANCIA A FALLAS DEL GT, activar deja este gt atendiendo clientes
+func (b *broker) activar(motivo string) {
+	b.estado = activo
+	b.arrancando = false
+	log.Printf("este gt pasa a ACTIVO porque %s, hay %d rmc vivos registrados", motivo, len(b.trabajadores))
+}
+
+// TOLERANCIA A FALLAS DEL GT, ceder deja este gt pasivo y suelta lo que tenia en cola,
+// esos clientes reintentan en el otro gt con el mismo id
+func (b *broker) ceder(motivo string) {
+	b.estado = pasivo
+	b.cola = nil
+	log.Printf("este gt pasa a PASIVO porque %s", motivo)
 }
 
 // quitar saca un id de la lista de rmc libres

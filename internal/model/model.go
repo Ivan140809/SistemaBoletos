@@ -88,6 +88,9 @@ type Solicitud struct {
 	DireccionNotificacion string `json:"direccion_notificacion,omitempty"` // cancelacion, donde escucha el cliente
 }
 
+// GTPasivo va en Instancia cuando contesta un gt pasivo, el cliente lo reconoce y pasa al otro gt
+const GTPasivo = "GT-PASIVO"
+
 // Respuesta es lo que se devuelve en todas las operaciones
 type Respuesta struct {
 	IdSolicitud string `json:"id_solicitud"` // a que solicitud responde

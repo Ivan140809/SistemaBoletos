@@ -16,13 +16,15 @@ import (
 	"os"
 	"sistemaboletos/internal/communication"
 	"sistemaboletos/internal/model"
+	"strings"
 	"time"
 )
 
 // main arranca el servicio y atiende cancelaciones para siempre
 func main() {
 	// direccion del push del gt
-	gt := flag.String("gt", "tcp://localhost:5557", "endpoint PUSH del Gestor de Transacciones")
+	// TOLERANCIA A FALLAS DEL GT, puede traer el gt primario y el de respaldo separados por coma
+	gt := flag.String("gt", "tcp://localhost:5557", "endpoint PUSH del Gestor de Transacciones, o primario y respaldo separados por coma")
 	// ESCALABILIDAD HORIZONTAL, una o varias direcciones de persistencia separadas por coma
 	persistencia := flag.String("persistencia", "tcp://localhost:5560", "endpoints del Servicio de Persistencia, varios separados por coma")
 	// cuanto esperar a persistencia antes de rendirse
@@ -45,9 +47,15 @@ func main() {
 	}
 	// cierra el socket al terminar
 	defer entrada.Close()
-	// se conecta al push del gt en el puerto 5557
-	if err := entrada.Connect(*gt); err != nil {
-		log.Fatalf("no se pudo conectar al gestor: %v", err)
+	// TOLERANCIA A FALLAS DEL GT, el pull se conecta a todos los gt de la lista y recibe del que
+	// este activo, asi las cancelaciones siguen llegando cuando el respaldo toma el control
+	for _, ep := range strings.Split(*gt, ",") {
+		if ep = strings.TrimSpace(ep); ep == "" {
+			continue
+		}
+		if err := entrada.Connect(ep); err != nil {
+			log.Fatalf("no se pudo conectar al gestor %s: %v", ep, err)
+		}
 	}
 	// aqui se crea el cliente req hacia persistencia, el mismo que usa rmc
 	per, err := communication.NuevoClienteReq(*persistencia, *timeout)

@@ -82,7 +82,7 @@ func uso() {
 // opciones define -gt -id y -timeout, -gt usa SRB_GT si no se escribe y si no localhost
 func opciones(fs *flag.FlagSet, idPorDefecto string) opcionesComunes {
 	return opcionesComunes{
-		gt: fs.String("gt", entorno("SRB_GT", "tcp://localhost:5555"), "endpoint del Gestor de Transacciones"),
+		gt: fs.String("gt", entorno("SRB_GT", "tcp://localhost:5555"), "endpoint del Gestor de Transacciones, o primario y respaldo separados por coma"),
 		id: fs.String("id", idPorDefecto, "identificador del cliente"),
 		timeout: fs.Duration("timeout", 5*time.Second, "cuanto esperar la respuesta"),
 		// TOLERANCIA A FALLAS, patron lazy pirate, reenvia la misma solicitud si no llega respuesta
@@ -100,15 +100,23 @@ func entorno(variable, valorPorDefecto string) string {
 
 // nuevoCliente crea el socket req hacia el gt con los reintentos configurados
 func nuevoCliente(op opcionesComunes, nombre string) (*communication.ClienteReq, error) {
-	cliente, err := communication.NuevoClienteReq(*op.gt, *op.timeout)
+	// TOLERANCIA A FALLAS, -gt puede traer el gt primario y el de respaldo separados por coma,
+	// se usa uno a la vez y si no contesta el reintento va al otro
+	cliente, err := communication.NuevoClienteFailover(*op.gt, *op.timeout)
 	if err != nil {
 		return nil, err
 	}
 	// TOLERANCIA A FALLAS, si el gt no contesta a tiempo se reenvia la misma solicitud con el mismo id,
 	// la base la reconoce y no la ejecuta dos veces
 	cliente.Reintentos = *op.reintentos
+	// TOLERANCIA A FALLAS DEL GT, si contesta un gt pasivo se pasa de una vez al otro gt
+	cliente.Rechazar = func(datos []byte) bool {
+		var r model.Respuesta
+		json.Unmarshal(datos, &r)
+		return r.Instancia == model.GTPasivo
+	}
 	cliente.AlReintentar = func(intento int, err error) {
-		fmt.Fprintf(os.Stderr, "%s: %v, reintento %d de %d\n", nombre, err, intento, *op.reintentos)
+		fmt.Fprintf(os.Stderr, "%s: %v, reintento %d de %d en %s\n", nombre, err, intento, *op.reintentos, cliente.Direccion())
 	}
 	return cliente, nil
 }
@@ -279,8 +287,10 @@ func cancelar(argumentos []string) error {
 // ipHacia averigua la ip de esta maquina en la red por donde se llega al gt.
 // no manda nada, solo le pregunta al sistema operativo que tarjeta usaria
 func ipHacia(gt string) string {
+	// con primario y respaldo basta el primero, los dos estan en la red que ve la m2
+	gt = strings.Split(gt, ",")[0]
 	// saca host y puerto de tcp://host:puerto
-	direccion := strings.TrimPrefix(gt, "tcp://")
+	direccion := strings.TrimPrefix(strings.TrimSpace(gt), "tcp://")
 	// udp no abre conexion de verdad, solo escoge la ruta, udp4 para que localhost no de ::1
 	conexion, err := net.Dial("udp4", direccion)
 	if err != nil {

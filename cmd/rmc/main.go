@@ -11,6 +11,11 @@
 // TOLERANCIA A FALLAS, patron paranoid pirate de la guia de zeromq capitulo 4. rmc usa un dealer,
 // se registra en el gt con READY y los dos se mandan heartbeats cada segundo.
 // si el gt deja de dar senales, rmc cierra el socket y se reconecta esperando cada vez mas.
+
+// TOLERANCIA A FALLAS DEL GT, -gt puede traer el gt primario y el de respaldo separados por coma.
+// rmc abre un dealer hacia cada uno, se registra en los dos y les manda heartbeats a los dos, asi
+// cuando el respaldo toma el control ya tiene este rmc registrado y puede repartirle trabajo de una vez.
+// cada respuesta vuelve por el mismo gt que mando la solicitud.
 package main
 
 import (
@@ -25,8 +30,19 @@ import (
 	"runtime"
 	"sistemaboletos/internal/communication"
 	"sistemaboletos/internal/model"
+	"strconv"
+	"strings"
 	"time"
 )
+
+// gestor es la conexion de este rmc con un gt
+type gestor struct {
+	direccion string // endpoint router del gt
+	socket *zmq.Socket // dealer hacia el gt, nil mientras espera para reconectar
+	restantes int // cuantos intervalos sin senales del gt quedan antes de reconectar
+	espera time.Duration // cuanto esperar la proxima vez que haya que reconectar
+	reconectar time.Time // cuando volver a conectar si el socket esta cerrado
+}
 
 // mensajes de control con el gt, van solos en un frame y deben ser iguales a los del gt
 const (
@@ -39,7 +55,7 @@ const trabajo = "inproc://trabajo"
 
 // main arranca el rmc y atiende solicitudes para siempre
 func main() {
-	gt := flag.String("gt", "tcp://localhost:5556", "endpoint ROUTER del Gestor de Transacciones")
+	gt := flag.String("gt", "tcp://localhost:5556", "endpoint ROUTER del Gestor de Transacciones, o primario y respaldo separados por coma")
 	// ESCALABILIDAD HORIZONTAL, una o varias direcciones de persistencia separadas por coma
 	persistencia := flag.String("persistencia", "tcp://localhost:5560", "endpoint(s) del Servicio de Persistencia, varios separados por coma")
 	id := flag.String("id", "RMC-1", "nombre de esta instancia de RMC")
@@ -68,20 +84,26 @@ func main() {
 	}
 	go trabajar(*persistencia, *timeout, *reintentos, *id)
 
-	// TOLERANCIA A FALLAS, se conecta al gt y se registra
-	gestor := conectar(*gt, *id)
+	// TOLERANCIA A FALLAS, se conecta a cada gt de la lista y se registra en todos
+	var gestores []*gestor
+	for _, ep := range strings.Split(*gt, ",") {
+		if ep = strings.TrimSpace(ep); ep != "" {
+			gestores = append(gestores, &gestor{direccion: ep, socket: conectar(ep, *id), restantes: *vidas, espera: time.Second})
+		}
+	}
 	log.Printf("listo, recibe del gestor en %s y habla con persistencia en %s", *gt, *persistencia)
 
-	// TOLERANCIA A FALLAS, cuantos heartbeats del gt quedan por perder y cuanto esperar al reconectar
-	restantes := *vidas
-	espera := time.Second
 	siguienteLatido := time.Now().Add(*intervalo)
 	for {
-		// aqui se crea el poller con el socket del gt y el del trabajo, se arma cada vuelta porque
-		// el socket del gt cambia al reconectar
+		// aqui se crea el poller con los gt conectados y el socket del trabajo, se arma cada vuelta
+		// porque los sockets de los gt cambian al reconectar
 		poller := zmq.NewPoller()
-		poller.Add(gestor, zmq.POLLIN)
 		poller.Add(interno, zmq.POLLIN)
+		for _, g := range gestores {
+			if g.socket != nil {
+				poller.Add(g.socket, zmq.POLLIN)
+			}
+		}
 		// espera hasta que llegue algo o hasta que toque el heartbeat, minimo cero
 		tiempoEspera := time.Until(siguienteLatido)
 		if tiempoEspera < 0 {
@@ -93,47 +115,69 @@ func main() {
 			continue
 		}
 		for _, l := range listos {
-			switch l.Socket {
-			case gestor:
-				partes, err := gestor.RecvMessage(0)
-				if err != nil {
+			if l.Socket == interno {
+				// la respuesta ya procesada llega con el numero del gt que la pidio y vuelve por ese gt
+				partes, err := interno.RecvMessage(0)
+				if err != nil || len(partes) < 4 {
 					continue
 				}
+				n, _ := strconv.Atoi(partes[0])
+				if n < len(gestores) && gestores[n].socket != nil {
+					gestores[n].socket.SendMessage(partes[1:])
+				}
+				continue
+			}
+			for n, g := range gestores {
+				if l.Socket != g.socket {
+					continue
+				}
+				partes, err := g.socket.RecvMessage(0)
+				if err != nil {
+					break
+				}
 				// TOLERANCIA A FALLAS, cualquier mensaje del gt demuestra que sigue vivo
-				restantes = *vidas
-				espera = time.Second
-				// una solicitud llega como identidad del cliente, vacio y json, se pasa al trabajo.
-				// un HEARTBEAT del gt llega solo y no necesita nada mas
+				g.restantes = *vidas
+				g.espera = time.Second
+				// una solicitud llega como identidad del cliente, vacio y json, se pasa al trabajo con
+				// el numero del gt para saber por donde devolverla. un HEARTBEAT llega solo y no necesita mas
 				if len(partes) == 3 {
-					interno.SendMessage(partes)
+					interno.SendMessage(strconv.Itoa(n), partes[0], partes[1], partes[2])
 				}
-			case interno:
-				// la respuesta ya procesada vuelve al gt con la identidad del cliente
-				partes, err := interno.RecvMessage(0)
-				if err == nil {
-					gestor.SendMessage(partes)
-				}
+				break
 			}
 		}
-		// TOLERANCIA A FALLAS, cada intervalo cuenta un silencio del gt y manda su heartbeat.
-		// se cuenta por tiempo y no por vueltas sin mensajes, asi las respuestas del trabajo no tapan un gt caido
-		if !time.Now().Before(siguienteLatido) {
-			restantes--
-			if restantes == 0 {
-				// TOLERANCIA A FALLAS, el gt no da senales, se cierra el socket y se reconecta.
-				// la espera se duplica cada vez hasta 32 segundos para no saturar al gt cuando vuelva
-				log.Printf("el gestor no da senales, se reconecta en %v", espera)
-				gestor.Close()
-				time.Sleep(espera)
-				if espera < 32*time.Second {
-					espera *= 2
-				}
-				gestor = conectar(*gt, *id)
-				restantes = *vidas
-			} else {
-				gestor.Send(latido, 0)
+		ahora := time.Now()
+		// TOLERANCIA A FALLAS, vuelve a conectar los gt cuya espera ya paso
+		for _, g := range gestores {
+			if g.socket == nil && !ahora.Before(g.reconectar) {
+				g.socket = conectar(g.direccion, *id)
+				g.restantes = *vidas
 			}
-			siguienteLatido = time.Now().Add(*intervalo)
+		}
+		// TOLERANCIA A FALLAS, cada intervalo cuenta un silencio de cada gt y le manda su heartbeat.
+		// se cuenta por tiempo y no por vueltas sin mensajes, asi las respuestas del trabajo no tapan un gt caido
+		if !ahora.Before(siguienteLatido) {
+			for _, g := range gestores {
+				if g.socket == nil {
+					continue
+				}
+				g.restantes--
+				if g.restantes > 0 {
+					g.socket.Send(latido, 0)
+					continue
+				}
+				// TOLERANCIA A FALLAS, este gt no da senales, se cierra su socket y se reconecta despues.
+				// la espera se duplica cada vez hasta 32 segundos para no saturar al gt cuando vuelva.
+				// no se duerme aqui para seguir atendiendo al otro gt mientras tanto
+				log.Printf("el gestor %s no da senales, se reconecta en %v", g.direccion, g.espera)
+				g.socket.Close()
+				g.socket = nil
+				g.reconectar = ahora.Add(g.espera)
+				if g.espera < 32*time.Second {
+					g.espera *= 2
+				}
+			}
+			siguienteLatido = ahora.Add(*intervalo)
 		}
 	}
 }
@@ -186,11 +230,13 @@ func trabajar(persistencia string, timeout time.Duration, reintentos int, id str
 		log.Printf("persistencia no contesto (%v), reintento %d de %d", err, intento, reintentos)
 	}
 	for {
-		// llega identidad del cliente, vacio y la solicitud
+		// llega el numero del gt, identidad del cliente, vacio y la solicitud
 		partes, err := interno.RecvMessage(0)
-		if err != nil || len(partes) < 3 {
+		if err != nil || len(partes) < 4 {
 			continue
 		}
+		// el numero del gt va y vuelve sin tocarse, el resto es la solicitud de siempre
+		gt, partes := partes[0], partes[1:]
 		var s model.Solicitud
 		var resp model.Respuesta
 		if err := json.Unmarshal([]byte(partes[2]), &s); err != nil {
@@ -202,8 +248,8 @@ func trabajar(persistencia string, timeout time.Duration, reintentos int, id str
 		resp.IdSolicitud = s.IdSolicitud
 		resp.Instancia = id
 		datos, _ := json.Marshal(resp)
-		// devuelve identidad del cliente, vacio y la respuesta
-		interno.SendMessage(partes[0], partes[1], string(datos))
+		// devuelve el numero del gt, identidad del cliente, vacio y la respuesta
+		interno.SendMessage(gt, partes[0], partes[1], string(datos))
 	}
 }
 
