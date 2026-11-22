@@ -1,3 +1,9 @@
 bin/
 metrics/
 .env
+/client
+/manager
+/rmc
+/persistence
+/cancellations
+.DS_Store
