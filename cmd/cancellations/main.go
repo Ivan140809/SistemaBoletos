@@ -56,6 +56,8 @@ func main() {
 	}
 	// cierra el cliente al terminar
 	defer per.Cerrar()
+	// TOLERANCIA A FALLAS, un reintento con persistencia con el mismo id, la cancelacion es idempotente
+	per.Reintentos = 1
 	// avisa que el servicio ya esta listo
 	log.Printf("listo, recibe del gestor en %s y habla con persistencia en %s", *gt, *persistencia)
 

@@ -12,7 +12,7 @@ Se implementan las operaciones de consulta y reserva de forma sincrona.
 ## 1. Tecnologías
 
 - **Go 1.25**: Todos los procesos del sistema.
-- **ZeroMQ** (librería `pebbe/zmq4`): Comunicación entre procesos con los patrones REQ/ROUTER, DEALER/REP, REQ/REP y PUSH/PULL.
+- **ZeroMQ** (librería `pebbe/zmq4`): Comunicación entre procesos con los patrones REQ/ROUTER, ROUTER/DEALER (paranoid pirate), REQ/REP y PUSH/PULL.
 - **PostgreSQL en Supabase** (driver `pgx`): Eventos, ocurrencias y reservas. El esquema y la función de reserva están en `internal/db/schema.sql`.
 - **Scripts de bash**: Arranque cada máquina.
 
@@ -33,7 +33,7 @@ Comunicación entre procesos:
 | Origen | Destino | Patron | Puerto|
 |---|---|---|---|
 | `client` (M1) | `manager` (M2) | REQ / ROUTER | 5555 en M2 |
-| `manager` (M2) | `rmc` (M2) | DEALER / REP | 5556 en M2 |
+| `manager` (M2) | `rmc` (M2) | ROUTER / DEALER con heartbeats, paranoid pirate | 5556 en M2 |
 | `manager` (M2) | `cancellations` (M2) | PUSH / PULL | 5557 en M2 |
 | `rmc` (M2) | `persistence` (M3) | REQ / REP | 5560 en M3 |
 | `persistence` (M3) | Supabase | PostgreSQL | 5432 en Supabase |

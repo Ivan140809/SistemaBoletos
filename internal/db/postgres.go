@@ -153,6 +153,25 @@ func (b *BaseDatos) Disponibilidad(ctx context.Context, idEvento string, idOcurr
 	return disponibles, err
 }
 
+// YaProcesada devuelve la respuesta guardada si esta solicitud ya se ejecuto en la base.
+// TOLERANCIA A FALLAS, sirve cuando un rmc reservo, se cayo antes de responder y otro rmc la repite
+func (b *BaseDatos) YaProcesada(ctx context.Context, idSolicitud string) (model.Respuesta, bool, error) {
+	var datos []byte
+	// se lee de la principal y no de la replica para ver lo ultimo que se escribio
+	err := b.pool.QueryRow(ctx, `SELECT respuesta FROM srb.solicitudes_procesadas WHERE id_solicitud = $1 AND respuesta IS NOT NULL`, idSolicitud).Scan(&datos)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return model.Respuesta{}, false, nil
+	}
+	if err != nil {
+		return model.Respuesta{}, false, err
+	}
+	var resp model.Respuesta
+	if err := json.Unmarshal(datos, &resp); err != nil {
+		return model.Respuesta{}, false, err
+	}
+	return resp, true, nil
+}
+
 // CrearReserva deja todo el trabajo a la funcion sql srb.crear_reserva que es atomica
 func (b *BaseDatos) CrearReserva(ctx context.Context, s model.Solicitud) (model.Respuesta, error) {
 	// aqui se crea la reserva dentro de la base

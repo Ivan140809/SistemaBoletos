@@ -204,6 +204,11 @@ func atender(ctx context.Context, base *db.BaseDatos, mensaje []byte) (model.Res
 		// aqui se crea la respuesta con los eventos
 		resp = model.Respuesta{IdSolicitud: s.IdSolicitud, Exito: true, Mensaje: encontrados, Eventos: eventos}
 	case model.OpConsultarDisponibilidad:
+		// TOLERANCIA A FALLAS, si otro rmc ya hizo esta reserva antes de caerse se devuelve lo guardado
+		if guardada, ya, errYa := base.YaProcesada(ctx, s.IdSolicitud); errYa == nil && ya {
+			resp = guardada
+			break
+		}
 		var disponibles int
 		disponibles, err = base.Disponibilidad(ctx, s.IdEvento, s.IdOcurrencia)
 		// aqui se crea la respuesta con los asientos libres

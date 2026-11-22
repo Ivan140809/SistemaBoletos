@@ -27,6 +27,7 @@ type opcionesComunes struct {
 	gt *string // direccion del gestor de transacciones
 	id *string // nombre del cliente
 	timeout *time.Duration // cuanto esperar la respuesta
+	reintentos *int // TOLERANCIA A FALLAS, cuantas veces reenviar si no hay respuesta
 }
 
 // resultadoConcurrente guarda lo que le paso a cada cliente del subcomando concurrente
@@ -81,9 +82,11 @@ func uso() {
 // opciones define -gt -id y -timeout, -gt usa SRB_GT si no se escribe y si no localhost
 func opciones(fs *flag.FlagSet, idPorDefecto string) opcionesComunes {
 	return opcionesComunes{
-		gt:      fs.String("gt", entorno("SRB_GT", "tcp://localhost:5555"), "endpoint del Gestor de Transacciones"),
-		id:      fs.String("id", idPorDefecto, "identificador del cliente"),
+		gt: fs.String("gt", entorno("SRB_GT", "tcp://localhost:5555"), "endpoint del Gestor de Transacciones"),
+		id: fs.String("id", idPorDefecto, "identificador del cliente"),
 		timeout: fs.Duration("timeout", 5*time.Second, "cuanto esperar la respuesta"),
+		// TOLERANCIA A FALLAS, patron lazy pirate, reenvia la misma solicitud si no llega respuesta
+		reintentos: fs.Int("reintentos", 3, "cuantas veces reenviar la solicitud si no llega respuesta"),
 	}
 }
 
@@ -95,11 +98,26 @@ func entorno(variable, valorPorDefecto string) string {
 	return valorPorDefecto
 }
 
+// nuevoCliente crea el socket req hacia el gt con los reintentos configurados
+func nuevoCliente(op opcionesComunes, nombre string) (*communication.ClienteReq, error) {
+	cliente, err := communication.NuevoClienteReq(*op.gt, *op.timeout)
+	if err != nil {
+		return nil, err
+	}
+	// TOLERANCIA A FALLAS, si el gt no contesta a tiempo se reenvia la misma solicitud con el mismo id,
+	// la base la reconoce y no la ejecuta dos veces
+	cliente.Reintentos = *op.reintentos
+	cliente.AlReintentar = func(intento int, err error) {
+		fmt.Fprintf(os.Stderr, "%s: %v, reintento %d de %d\n", nombre, err, intento, *op.reintentos)
+	}
+	return cliente, nil
+}
+
 // enviar manda una solicitud al gt y devuelve la respuesta, cuanto tardo y un error
 func enviar(op opcionesComunes, s model.Solicitud) (model.Respuesta, time.Duration, error) {
 	var resp model.Respuesta
 	// aqui se crea el socket req propio de este envio
-	cliente, err := communication.NuevoClienteReq(*op.gt, *op.timeout)
+	cliente, err := nuevoCliente(op, s.IdCliente)
 	if err != nil {
 		return resp, 0, err
 	}
@@ -307,7 +325,7 @@ func concurrente(argumentos []string) error {
 			defer terminados.Done()
 			r := resultadoConcurrente{cliente: fmt.Sprintf("%s-%d", *op.id, i+1), pedidos: cantidad}
 			// aqui se crea el socket req propio de este cliente
-			cliente, err := communication.NuevoClienteReq(*op.gt, *op.timeout)
+			cliente, err := nuevoCliente(op, r.cliente)
 			conectados.Done()
 			if err != nil {
 				r.err = err
