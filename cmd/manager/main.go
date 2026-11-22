@@ -54,6 +54,7 @@ type broker struct {
 	backend       *zmq.Socket            // router de los rmc
 	cancelaciones *zmq.Socket            // push hacia el servicio de cancelaciones
 	trabajadores  map[string]*trabajador // rmc vivos por identidad
+	caidos        map[string]bool        // rmc dados por caidos, sus mensajes atrasados se ignoran
 	libres        []string               // rmc libres en orden de llegada
 	cola          []pendiente            // solicitudes esperando un rmc libre
 	intervalo     time.Duration          // periodo de espera de latidos
@@ -77,7 +78,7 @@ func main() {
 	log.SetPrefix("GT ")
 	log.SetFlags(log.Ltime | log.Lmicroseconds)
 
-	b := &broker{trabajadores: map[string]*trabajador{}, intervalo: *intervalo, vidas: *vidas, espera: *espera}
+	b := &broker{trabajadores: map[string]*trabajador{}, caidos: map[string]bool{}, intervalo: *intervalo, vidas: *vidas, espera: *espera}
 	// aqui se crea el router que atiende a los clientes
 	b.frontend = abrir(zmq.ROUTER, *dirClientes)
 	// ESCALABILIDAD HORIZONTAL, aqui se conectan todos los rmc que se lancen
@@ -111,7 +112,10 @@ func main() {
 			case b.frontend:
 				b.desdeCliente()
 			case b.backend:
-				b.desdeRMC()
+				// TOLERANCIA A FALLAS, lee todo lo que tenga el backend antes de revisar quien se cayo,
+				// si el gt estuvo pausado los heartbeats atrasados no hacen que de por caido a un rmc vivo
+				for b.desdeRMC() {
+				}
 			}
 		}
 		// TOLERANCIA A FALLAS, cada intervalo manda heartbeats y revisa quien se cayo
@@ -187,13 +191,22 @@ func (b *broker) repartir() {
 }
 
 // desdeRMC recibe del backend un mensaje de control o una respuesta para un cliente
-func (b *broker) desdeRMC() {
-	partes, err := b.backend.RecvMessage(0)
-	if err != nil || len(partes) < 2 {
-		return
+// devuelve false cuando ya no hay mas mensajes esperando
+func (b *broker) desdeRMC() bool {
+	partes, err := b.backend.RecvMessage(zmq.DONTWAIT)
+	if err != nil {
+		return false
+	}
+	if len(partes) < 2 {
+		return true
 	}
 	// el router pone primero la identidad del rmc que mando el mensaje
 	id := partes[0]
+	// TOLERANCIA A FALLAS, cada conexion de rmc usa un nombre nuevo, asi que un nombre caido no vuelve.
+	// lo que llegue de el son heartbeats atrasados de una conexion cerrada y no debe registrarlo otra vez
+	if b.caidos[id] {
+		return true
+	}
 	// TOLERANCIA A FALLAS, cualquier mensaje del rmc demuestra que sigue vivo
 	t, conocido := b.trabajadores[id]
 	if !conocido {
@@ -207,7 +220,7 @@ func (b *broker) desdeRMC() {
 
 	// mensaje de control, READY o HEARTBEAT, no hay nada mas que hacer
 	if len(partes) == 2 {
-		return
+		return true
 	}
 	// respuesta, llega como identidad del rmc, identidad del cliente, vacio y json
 	cliente, cuerpo := partes[1], partes[len(partes)-1]
@@ -217,7 +230,7 @@ func (b *broker) desdeRMC() {
 	// se le paso a otro, se descarta para no mandarle dos respuestas al cliente
 	if t.ocupado == nil || t.ocupado.idSolicitud != r.IdSolicitud {
 		log.Printf("%s contesto tarde la solicitud %s, ya la habia atendido otro rmc, se descarta", id, r.IdSolicitud)
-		return
+		return true
 	}
 	// el rmc queda libre otra vez y va al final de la fila
 	t.ocupado = nil
@@ -225,6 +238,7 @@ func (b *broker) desdeRMC() {
 	log.Printf("%s contesto la solicitud %s, %s: %s", r.Instancia, r.IdSolicitud, model.Resultado(r.Exito), r.Mensaje)
 	// el router usa la identidad para entregarla al cliente correcto
 	b.frontend.SendMessage(cliente, "", cuerpo)
+	return true
 }
 
 // latir manda un heartbeat a cada rmc y saca a los que no han dado senales a tiempo
@@ -238,6 +252,7 @@ func (b *broker) latir() {
 		}
 		// TOLERANCIA A FALLAS, paso el tiempo sin senales, se da por caido
 		delete(b.trabajadores, id)
+		b.caidos[id] = true
 		b.libres = quitar(b.libres, id)
 		log.Printf("%s no dio senales en %v, se da por caido, quedan %d rmc vivos", id, time.Duration(b.vidas)*b.intervalo, len(b.trabajadores))
 		// TOLERANCIA A FALLAS, lo que estaba atendiendo vuelve al inicio de la cola con el mismo id,
