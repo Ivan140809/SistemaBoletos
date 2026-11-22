@@ -1,0 +1,19 @@
+# imagen con todos los programas del srb, para correr los experimentos en contenedores.
+# cada contenedor hace de una maquina (m1 clientes, m2 negocio, m3 almacenamiento) y se le
+
+# etapa de compilacion con go
+FROM golang:1.25-bookworm AS compilar
+RUN apt-get update && apt-get install -y --no-install-recommends libzmq3-dev pkg-config && rm -rf /var/lib/apt/lists/*
+WORKDIR /src
+COPY go.mod go.sum ./
+RUN go mod download
+COPY . .
+RUN go build -o /out/ ./cmd/...
+
+
+FROM debian:bookworm-slim
+RUN apt-get update && apt-get install -y --no-install-recommends libzmq5 ca-certificates procps && rm -rf /var/lib/apt/lists/*
+WORKDIR /app
+COPY --from=compilar /out/ ./bin/
+COPY scripts/ ./scripts/
+COPY data/ ./data/

@@ -1,0 +1,24 @@
+services:
+  m3:
+    build: { context: ., dockerfile: Dockerfile.experimentos }
+    image: srb-experimentos
+    env_file: .env
+    # reinicia la base con 50 eventos, 20 con dos fechas, cada vez que arranca
+    command: ./bin/persistence -bind "tcp://*:5560" -generar -workers ${WORKERS:-1} -tabla=false
+    cpuset: "${CPUS_M3:-0-1}"
+  m2:
+    image: srb-experimentos
+    # el script de la m2, la ip de la m3 es el nombre del contenedor
+    command: bash -c "sleep 4 && IP_ALMACEN=m3 RMCS=${RMCS:-1} ./scripts/machine2_business.sh"
+    cpuset: "${CPUS_M2:-2-5}"
+    depends_on: [m3]
+  m1:
+    image: srb-experimentos
+    # se queda esperando, las pruebas se lanzan con docker compose exec m1 ...
+    command: sleep infinity
+    environment:
+      SRB_GT: tcp://m2:5555
+    volumes:
+      - ./metrics:/app/metrics
+    cpuset: "${CPUS_M1:-6-7}"
+    depends_on: [m2]
