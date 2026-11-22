@@ -7,3 +7,9 @@ metrics/
 /persistence
 /cancellations
 .DS_Store
+/client
+/manager
+/rmc
+/persistence
+/cancellations
+.DS_Store
