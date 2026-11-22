@@ -1,4 +1,5 @@
-// cliente de la maquina 1, programa de terminal que simula usuarios con cinco subcomandos.
+// cliente de la maquina 1, programa de terminal que simula usuarios. ademas de los subcomandos de
+// abajo tiene carga y analizar para los experimentos de desempeno, estan en carga.go.
 // consultar pide los eventos de un mes, reservar pide asientos, modificar cambia los asientos o la
 // fecha de una reserva, cancelar la cancela y concurrente lanza varios clientes a la vez peleando
 // por el mismo evento. el cliente hace connect al gt y la respuesta vuelve por esa misma conexion.
@@ -57,6 +58,10 @@ func main() {
 		err = modificar(argumentos)
 	case "cancelar":
 		err = cancelar(argumentos)
+	case "carga":
+		err = carga(argumentos)
+	case "analizar":
+		err = analizar(argumentos)
 	default:
 		uso()
 	}
@@ -75,7 +80,9 @@ func uso() {
   reservar, reserva asientos de un evento
   concurrente, lanza varios clientes que reservan al mismo tiempo
   modificar, cambia los asientos o la fecha de una reserva
-  cancelar, cancela una reserva y espera la notificacion`)
+  cancelar, cancela una reserva y espera la notificacion
+  carga, genera carga con varios clientes y guarda cada solicitud en un csv
+  analizar, saca promedio, desviacion, p95 y transacciones por minuto de los csv de carga`)
 	os.Exit(2)
 }
 

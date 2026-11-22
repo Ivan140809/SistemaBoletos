@@ -25,12 +25,14 @@
 package main
 
 import (
+	"encoding/csv"
 	"encoding/json"
 	"flag"
 	"fmt"
 	"log"
 	"os"
 	"sistemaboletos/internal/model"
+	"strconv"
 	"time"
 
 	zmq "github.com/pebbe/zmq4"
@@ -50,10 +52,11 @@ const (
 
 // pendiente es una solicitud que espera un rmc o que un rmc esta atendiendo
 type pendiente struct {
-	cliente     string    // identidad del cliente para saber a donde devolver la respuesta
-	cuerpo      string    // json con la solicitud como llego
-	idSolicitud string    // id de la solicitud, para reconocer su respuesta
-	llego       time.Time // cuando llego a la cola asi no se queda esperando para siempre
+	cliente     string              // identidad del cliente para saber a donde devolver la respuesta
+	cuerpo      string              // json con la solicitud como llego
+	idSolicitud string              // id de la solicitud, para reconocer su respuesta
+	tipo        model.TipoSolicitud // tipo de operacion, para contar las transacciones por minuto
+	llego       time.Time           // cuando llego a la cola asi no se queda esperando para siempre
 }
 
 // trabajador es lo que el gt sabe de cada rmc conectado
@@ -83,6 +86,12 @@ type broker struct {
 	publicador *zmq.Socket // pub donde este gt anuncia su estado
 	par        *zmq.Socket // sub donde escucha el estado del otro gt, nil si corre solo
 	parVisto   time.Time   // ultima vez que el otro gt dio senales
+
+	// METRICAS, transacciones procesadas en el minuto actual, para la tabla 1 del enunciado
+	procesadas map[model.TipoSolicitud]int // respuestas entregadas por tipo
+	exitosas   map[model.TipoSolicitud]int // de esas, las que se hicieron
+	minuto     time.Time                   // cuando empezo el minuto que se esta contando
+	tpm        *csv.Writer                 // csv donde se guarda cada minuto, nil si no se pidio
 }
 
 // main arranca el gt y atiende mensajes para siempre
@@ -99,6 +108,8 @@ func main() {
 	rol := flag.String("rol", "primario", "primario o respaldo")
 	dirEstado := flag.String("estado", "tcp://*:5558", "endpoint PUB donde este gt publica su estado")
 	dirPar := flag.String("par", "", "endpoint PUB del otro gt, vacio si corre un solo gt")
+	// METRICAS, archivo donde se guardan las transacciones por minuto
+	archivoTPM := flag.String("tpm", "", "csv donde se guardan las transacciones por minuto, vacio para solo mostrarlas en el log")
 	flag.Parse()
 
 	log.SetOutput(os.Stdout)
@@ -109,6 +120,20 @@ func main() {
 	log.SetFlags(log.Ltime | log.Lmicroseconds)
 
 	b := &broker{trabajadores: map[string]*trabajador{}, caidos: map[string]bool{}, intervalo: *intervalo, vidas: *vidas, espera: *espera, rol: *rol, inicio: time.Now()}
+	// METRICAS, arranca el conteo de transacciones por minuto
+	b.procesadas, b.exitosas, b.minuto = map[model.TipoSolicitud]int{}, map[model.TipoSolicitud]int{}, time.Now()
+	if *archivoTPM != "" {
+		f, err := os.OpenFile(*archivoTPM, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0o644)
+		if err != nil {
+			log.Fatalf("no se pudo abrir %s: %v", *archivoTPM, err)
+		}
+		defer f.Close()
+		b.tpm = csv.NewWriter(f)
+		if info, _ := f.Stat(); info.Size() == 0 {
+			b.tpm.Write([]string{"fin_minuto", "consulta", "consulta_ok", "reserva", "reserva_ok", "modificacion", "modificacion_ok", "cancelacion"})
+			b.tpm.Flush()
+		}
+	}
 	// TOLERANCIA A FALLAS DEL GT, sin otro gt este siempre esta activo, como antes
 	b.estado = activo
 	if *dirPar != "" {
@@ -177,6 +202,10 @@ func main() {
 		if !time.Now().Before(siguienteLatido) {
 			b.latir()
 			siguienteLatido = time.Now().Add(b.intervalo)
+			// METRICAS, cada minuto deja registro de las transacciones procesadas
+			if time.Since(b.minuto) >= time.Minute {
+				b.reportarTPM()
+			}
 		}
 		// reparte lo que haya en cola entre los rmc libres, solo si este gt es el activo
 		if b.estado == activo {
@@ -235,12 +264,15 @@ func (b *broker) desdeCliente() {
 	}
 	// cancelacion es asincrona, va por el canal push y el cliente no espera el resultado se le envia posteriormente
 	if s.Tipo == model.TipoCancelacion {
-		cancelar(b.frontend, b.cancelaciones, identidad, s, cuerpo)
+		if cancelar(b.frontend, b.cancelaciones, identidad, s, cuerpo) {
+			// METRICAS, la cancelacion cuenta cuando se acepta, el resultado lo cuenta cancelaciones
+			b.procesadas[model.TipoCancelacion]++
+		}
 		return
 	}
 	// ESCALABILIDAD HORIZONTAL, reenvia a algun rmc con la identidad para saber a quien devolver
 	// TOLERANCIA A FALLAS, aunque no haya ningun rmc vivo se queda en la cola esperando por si alguno se reconecta o vuelve
-	b.cola = append(b.cola, pendiente{cliente: identidad, cuerpo: cuerpo, idSolicitud: s.IdSolicitud, llego: time.Now()})
+	b.cola = append(b.cola, pendiente{cliente: identidad, cuerpo: cuerpo, idSolicitud: s.IdSolicitud, llego: time.Now(), tipo: s.Tipo})
 
 	// el gt no espera la respuesta aqui, llega despues por el backend en desdeRMC
 }
@@ -301,6 +333,11 @@ func (b *broker) desdeRMC() bool {
 	if t.ocupado == nil || t.ocupado.idSolicitud != r.IdSolicitud {
 		log.Printf("%s contesto tarde la solicitud %s, ya la habia atendido otro rmc, se descarta", id, r.IdSolicitud)
 		return true
+	}
+	// METRICAS, cuenta la transaccion procesada y si se hizo
+	b.procesadas[t.ocupado.tipo]++
+	if r.Exito {
+		b.exitosas[t.ocupado.tipo]++
 	}
 	// el rmc queda libre otra vez y va al final de la fila
 	t.ocupado = nil
@@ -409,17 +446,34 @@ func quitar(lista []string, id string) []string {
 
 // cancelar pasa la cancelacion al servicio de cancelaciones y le responde al cliente de una vez.
 // el resultado real le llega despues al cliente como notificacion en su direccion
-func cancelar(frontend, cancelaciones *zmq.Socket, identidad string, s model.Solicitud, cuerpo string) {
+func cancelar(frontend, cancelaciones *zmq.Socket, identidad string, s model.Solicitud, cuerpo string) bool {
 	// sin bloquear, si el servicio de cancelaciones no esta conectado falla de una vez
 	if _, err := cancelaciones.SendBytes([]byte(cuerpo), zmq.DONTWAIT); err != nil {
 		log.Printf("%s, %s: no hay servicio de cancelaciones conectado", s.Resumen(), model.Resultado(false))
 		responder(frontend, identidad, model.Respuesta{IdSolicitud: s.IdSolicitud, Mensaje: "no hay servicio de cancelaciones conectado para atenderla"})
-		return
+		return false
 	}
 	// deja registro de que se acepto
 	log.Printf("%s, se acepta y se pasa a cancelaciones", s.Resumen())
 	// confirma la recepcion, exito aqui quiere decir recibida y no cancelada todavia
 	responder(frontend, identidad, model.Respuesta{IdSolicitud: s.IdSolicitud, Exito: true, Mensaje: fmt.Sprintf("cancelacion de %s recibida, el resultado le llega como notificacion a %s", s.IdReserva, s.DireccionNotificacion)})
+	return true
+}
+
+// METRICAS, reportarTPM deja en el log y en el csv cuantas transacciones de cada tipo se procesaron
+// en el ultimo minuto, es la medida en el gestor de transacciones que pide la tabla 1
+func (b *broker) reportarTPM() {
+	c, r, m := model.TipoConsulta, model.TipoReserva, model.TipoModificacion
+	if b.procesadas[c]+b.procesadas[r]+b.procesadas[m]+b.procesadas[model.TipoCancelacion] > 0 {
+		log.Printf("TPM ultimo minuto: consultas %d (%d exitosas), reservas %d (%d exitosas), modificaciones %d (%d exitosas), cancelaciones %d",
+			b.procesadas[c], b.exitosas[c], b.procesadas[r], b.exitosas[r], b.procesadas[m], b.exitosas[m], b.procesadas[model.TipoCancelacion])
+		if b.tpm != nil {
+			b.tpm.Write([]string{time.Now().Format(time.RFC3339), strconv.Itoa(b.procesadas[c]), strconv.Itoa(b.exitosas[c]), strconv.Itoa(b.procesadas[r]),
+				strconv.Itoa(b.exitosas[r]), strconv.Itoa(b.procesadas[m]), strconv.Itoa(b.exitosas[m]), strconv.Itoa(b.procesadas[model.TipoCancelacion])})
+			b.tpm.Flush()
+		}
+	}
+	b.procesadas, b.exitosas, b.minuto = map[model.TipoSolicitud]int{}, map[model.TipoSolicitud]int{}, time.Now()
 }
 
 // responder le contesta al cliente directo desde el gt sin pasar por rmc
