@@ -46,9 +46,9 @@ func GenerarEventos(mes string, cantidad, dobles, asientos int) ([]model.Evento,
 			fecha := inicioMes.AddDate(0, 0, i%14+o*14)
 			// aqui se crea la fecha con todos los asientos libres
 			evento.Ocurrencias = append(evento.Ocurrencias, model.Ocurrencia{
-				IdOcurrencia:        o + 1,
-				Fecha:               fecha.Format("2006-01-02"),
-				CapacidadTotal:      asientos,
+				IdOcurrencia: o + 1,
+				Fecha: fecha.Format("2006-01-02"),
+				CapacidadTotal: asientos,
 				AsientosDisponibles: asientos,
 			})
 		}

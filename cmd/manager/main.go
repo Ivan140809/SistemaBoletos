@@ -40,7 +40,7 @@ import (
 
 // mensajes de control entre el gt y los rmc
 const (
-	listo  = "READY"     // estado del rmc
+	listo = "READY" // estado del rmc
 	latido = "HEARTBEAT" // senal de vida de los dos sentidos
 )
 
@@ -52,46 +52,46 @@ const (
 
 // pendiente es una solicitud que espera un rmc o que un rmc esta atendiendo
 type pendiente struct {
-	cliente     string              // identidad del cliente para saber a donde devolver la respuesta
-	cuerpo      string              // json con la solicitud como llego
-	idSolicitud string              // id de la solicitud, para reconocer su respuesta
-	tipo        model.TipoSolicitud // tipo de operacion, para contar las transacciones por minuto
-	llego       time.Time           // cuando llego a la cola asi no se queda esperando para siempre
+	cliente string // identidad del cliente para saber a donde devolver la respuesta
+	cuerpo string // json con la solicitud como llego
+	idSolicitud string // id de la solicitud, para reconocer su respuesta
+	tipo model.TipoSolicitud // tipo de operacion, para contar las transacciones por minuto
+	llego time.Time // cuando llego a la cola asi no se queda esperando para siempre
 }
 
 // trabajador es lo que el gt sabe de cada rmc conectado
 type trabajador struct {
-	expira  time.Time  // cuando expira por no haber dado senales de vida
+	expira time.Time // cuando expira por no haber dado senales de vida
 	ocupado *pendiente // que solicitud esta atendiendo, si tiene valor es porque esta ocupado
 }
 
 // broker guarda el estado del gt
 type broker struct {
-	frontend      *zmq.Socket            // router de los clientes
-	backend       *zmq.Socket            // router de los rmc
-	cancelaciones *zmq.Socket            // push hacia el servicio de cancelaciones
-	trabajadores  map[string]*trabajador // rmc vivos por identidad
-	caidos        map[string]bool        // rmc dados por caidos, sus mensajes atrasados se ignoran
-	libres        []string               // rmc libres en orden de llegada
-	cola          []pendiente            // solicitudes esperando un rmc libre
-	intervalo     time.Duration          // periodo de espera de latidos
-	vidas         int                    // cuantos intervalos sin senales se aguantan
-	espera        time.Duration          // cuanto puede esperar una solicitud en cola
+	frontend *zmq.Socket // router de los clientes
+	backend *zmq.Socket // router de los rmc
+	cancelaciones *zmq.Socket // push hacia el servicio de cancelaciones
+	trabajadores map[string]*trabajador // rmc vivos por identidad
+	caidos map[string]bool // rmc dados por caidos, sus mensajes atrasados se ignoran
+	libres []string // rmc libres en orden de llegada
+	cola []pendiente // solicitudes esperando un rmc libre
+	intervalo time.Duration // periodo de espera de latidos
+	vidas int // cuantos intervalos sin senales se aguantan
+	espera time.Duration // cuanto puede esperar una solicitud en cola
 
 	// TOLERANCIA A FALLAS DEL GT, estado para binary star
-	rol        string      // primario o respaldo
-	estado     string      // ACTIVO o PASIVO
-	arrancando bool        // el primario recien arrancado espera un momento a ver si el respaldo esta activo
-	inicio     time.Time   // cuando arranco este gt
+	rol string // primario o respaldo
+	estado string // ACTIVO o PASIVO
+	arrancando bool // el primario recien arrancado espera un momento a ver si el respaldo esta activo
+	inicio time.Time // cuando arranco este gt
 	publicador *zmq.Socket // pub donde este gt anuncia su estado
-	par        *zmq.Socket // sub donde escucha el estado del otro gt, nil si corre solo
-	parVisto   time.Time   // ultima vez que el otro gt dio senales
+	par *zmq.Socket // sub donde escucha el estado del otro gt, nil si corre solo
+	parVisto time.Time // ultima vez que el otro gt dio senales
 
 	// METRICAS, transacciones procesadas en el minuto actual, para la tabla 1 del enunciado
 	procesadas map[model.TipoSolicitud]int // respuestas entregadas por tipo
-	exitosas   map[model.TipoSolicitud]int // de esas, las que se hicieron
-	minuto     time.Time                   // cuando empezo el minuto que se esta contando
-	tpm        *csv.Writer                 // csv donde se guarda cada minuto, nil si no se pidio
+	exitosas map[model.TipoSolicitud]int // de esas, las que se hicieron
+	minuto time.Time // cuando empezo el minuto que se esta contando
+	tpm *csv.Writer // csv donde se guarda cada minuto, nil si no se pidio
 }
 
 // main arranca el gt y atiende mensajes para siempre

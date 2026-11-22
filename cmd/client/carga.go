@@ -48,28 +48,28 @@ var escenarios = map[int][]perfil{
 
 // fila es una solicitud medida, una linea del csv
 type fila struct {
-	etiqueta      string // por ejemplo base o escalable
-	escenario     int
-	cliente       string
-	perfil        string
-	operacion     model.TipoSolicitud
-	idSolicitud   string
-	inicio        time.Time
-	desdeInicio   time.Duration // cuanto despues del arranque de la prueba
-	duracion      time.Duration
-	exito         bool   // la operacion se hizo
-	errorRed      bool   // no llego respuesta ni con los reintentos
-	instancia     string // que rmc la atendio
-	calentamiento bool   // cae en el periodo de calentamiento y no cuenta en las metricas
-	mensaje       string
+	etiqueta string // por ejemplo base o escalable
+	escenario int
+	cliente string
+	perfil string
+	operacion model.TipoSolicitud
+	idSolicitud string
+	inicio time.Time
+	desdeInicio time.Duration // cuanto despues del arranque de la prueba
+	duracion time.Duration
+	exito bool // la operacion se hizo
+	errorRed bool // no llego respuesta ni con los reintentos
+	instancia string // que rmc la atendio
+	calentamiento bool // cae en el periodo de calentamiento y no cuenta en las metricas
+	mensaje string
 }
 
 // reservaPropia es una reserva que hizo este cliente, para poder modificarla despues
 type reservaPropia struct {
-	id         string
-	evento     string
+	id string
+	evento string
 	ocurrencia int
-	cantidad   int
+	cantidad int
 }
 
 // carga es el subcomando que genera carga con varios clientes a la vez
@@ -184,8 +184,8 @@ func carga(argumentos []string) error {
 // valores de la prueba que comparten todas las goroutines, se fijan antes de arrancar
 var (
 	inicioPrueba, finPrueba, finCalentamiento time.Time
-	etiquetaPrueba                            string
-	escenarioPrueba                           int
+	etiquetaPrueba string
+	escenarioPrueba int
 )
 
 // generar es lo que hace un cliente durante la prueba
@@ -384,24 +384,24 @@ func ms(d time.Duration) string {
 
 // metrica es el resumen de una operacion en una prueba
 type metrica struct {
-	etiqueta   string
-	escenario  int
-	operacion  model.TipoSolicitud
-	total      int     // respuestas recibidas fuera del calentamiento
-	exitos     int     // de esas, cuantas se hicieron
-	erroresRed int     // sin respuesta despues de los reintentos
-	promedio   float64 // tiempo de respuesta en ms
+	etiqueta string
+	escenario int
+	operacion model.TipoSolicitud
+	total int // respuestas recibidas fuera del calentamiento
+	exitos int // de esas, cuantas se hicieron
+	erroresRed int // sin respuesta despues de los reintentos
+	promedio float64 // tiempo de respuesta en ms
 	desviacion float64 // desviacion estandar en ms
-	p95        float64 // percentil 95 en ms
-	tpm        float64 // respuestas por minuto
-	tpmExitos  float64 // operaciones hechas por minuto
+	p95 float64 // percentil 95 en ms
+	tpm float64 // respuestas por minuto
+	tpmExitos float64 // operaciones hechas por minuto
 }
 
 // resumir saca las metricas por etiqueta, escenario y operacion. solo cuenta lo que esta fuera del
 // calentamiento, y el tiempo de respuesta solo de las solicitudes que si recibieron respuesta
 func resumir(filas []fila, efectivo time.Duration) []metrica {
 	type clave struct {
-		etiqueta  string
+		etiqueta string
 		escenario int
 		operacion model.TipoSolicitud
 	}
