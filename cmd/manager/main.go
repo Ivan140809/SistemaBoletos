@@ -14,7 +14,7 @@
 // se saca de la lista y la solicitud que estaba atendiendo se le pasa a otro rmc con el mismo id,
 // asi el cliente recibe su respuesta sin enterarse de la falla y la base no la ejecuta dos veces.
 
-// TOLERANCIA A FALLAS DEL GT, patron binary star de la guia de zeromq (capitulo 4). se corren dos gt,
+// TOLERANCIA A FALLAS DEL GT, patron binary star, se corren dos gt,
 // un primario y un respaldo, que se publican su estado (ACTIVO o PASIVO) cada segundo por pub/sub en
 // el puerto 5558. solo el activo atiende clientes. el respaldo toma el control cuando el primario lleva
 // tres intervalos sin dar senales y ademas le llega una solicitud de un cliente, asi si solo se cae el
